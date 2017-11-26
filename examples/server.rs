@@ -23,6 +23,7 @@ impl Service for Echo {
         futures::future::ok(match (req.method(), req.path()) {
             (&Get, "/") | (&Get, "/echo") => {
                 Response::new()
+                    .with_status(StatusCode::Unregistered(900))
                     .with_header(ContentLength(INDEX.len() as u64))
                     .with_body(INDEX)
             },

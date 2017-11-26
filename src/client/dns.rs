@@ -1,12 +1,13 @@
 use std::io;
-use std::net::{
-    Ipv4Addr, Ipv6Addr,
-    SocketAddr, ToSocketAddrs,
-    SocketAddrV4, SocketAddrV6,
-};
+use std::net::{SocketAddr, ToSocketAddrs, Ipv4Addr, SocketAddrV4, Ipv6Addr, SocketAddrV6};
 use std::vec;
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 use ::futures::{Async, Future, Poll};
+use Uri;
+
+pub const RERANK_FRAGMENT: &'static str = "947afd3b7a_rerank";
 
 pub struct Work {
     host: String,
@@ -45,6 +46,61 @@ impl IpAddrs {
             return Some(IpAddrs { iter: vec![SocketAddr::V6(addr)].into_iter() })
         }
         None
+    }
+}
+
+lazy_static! {
+    static ref CUSTOM_DOMAIN2ADDR: RwLock<HashMap<String, SocketAddr>> = {
+        let h = HashMap::new();
+        RwLock::new(h)
+    };
+}
+
+fn get_custom_addr(domain: &str) -> Option<SocketAddr> {
+    match CUSTOM_DOMAIN2ADDR.read() {
+        Ok(addrs) => addrs.get(domain).cloned(),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_reranking(uri: &Uri) -> bool {
+    match uri.fragment() {
+        Some(fragment) if fragment == RERANK_FRAGMENT => true,
+        _ => false,
+    }
+}
+
+pub fn set_custom_addr(domain: String, addr: &str) {
+    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
+        if let Ok(addr) = addr.parse::<Ipv4Addr>() {
+            let addr = SocketAddrV4::new(addr, 443);
+            let addr = SocketAddr::V4(addr);
+            addrs.insert(domain, addr);
+        }
+    }
+}
+
+pub fn remove_custom_addr(domain: &str) {
+    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
+        addrs.remove(domain);
+    }
+}
+
+impl IpAddrs {
+    pub fn try_parse_custom(domain: &str, is_reranking: bool) -> Option<IpAddrs> {
+        if is_reranking {
+            return None;
+        }
+
+        match get_custom_addr(domain) {
+            Some(addr) => {
+                debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);
+                Some(IpAddrs {
+                    iter: vec![addr].into_iter()
+                })
+            },
+            None => None,
+        }
     }
 }
 

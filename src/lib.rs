@@ -1,5 +1,4 @@
 #![doc(html_root_url = "https://docs.rs/hyper/0.11.27")]
-#![deny(missing_docs)]
 #![deny(warnings)]
 #![deny(missing_debug_implementations)]
 #![cfg_attr(all(test, feature = "nightly"), feature(test))]
@@ -39,6 +38,8 @@ extern crate tokio_proto;
 extern crate tokio_service;
 extern crate unicase;
 extern crate want;
+#[macro_use]
+extern crate lazy_static;
 
 #[cfg(all(test, feature = "nightly"))]
 extern crate test;

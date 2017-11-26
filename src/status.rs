@@ -235,13 +235,7 @@ impl StatusCode {
     /// This function is temporary. When the `TryFrom` trait becomes stable,
     /// this will be deprecated and replaced by `TryFrom<u16>`.
     pub fn try_from(n: u16) -> Result<StatusCode, InvalidStatusCode> {
-        if n < 100 || n > 599 {
-            Err(InvalidStatusCode {
-                _inner: (),
-            })
-        } else {
-            Ok(StatusCode::from_u16(n))
-        }
+        Ok(StatusCode::from_u16(n))
     }
 
     fn from_u16(n: u16) -> StatusCode {

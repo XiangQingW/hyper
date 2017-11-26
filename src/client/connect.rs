@@ -4,6 +4,9 @@ use std::io;
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::RwLock;
 
 use futures::{Future, Poll, Async};
 use futures::future::{Executor, ExecuteError};
@@ -137,10 +140,15 @@ impl Service for HttpConnector {
             },
         };
 
+        let is_reranking = super::dns::is_reranking(&uri);
+        debug!("is_reranking: {:?}", is_reranking);
+
         HttpConnecting {
+            host: host.into(),
             state: State::Lazy(self.executor.clone(), host.into(), port),
             handle: self.handle.clone(),
             keep_alive_timeout: self.keep_alive_timeout,
+            is_reranking,
         }
     }
 }
@@ -148,9 +156,11 @@ impl Service for HttpConnector {
 #[inline]
 fn invalid_url(err: InvalidUrl, handle: &Handle) -> HttpConnecting {
     HttpConnecting {
+        host: "".into(),
         state: State::Error(Some(io::Error::new(io::ErrorKind::InvalidInput, err))),
         handle: handle.clone(),
         keep_alive_timeout: None,
+        is_reranking: false,
     }
 }
 
@@ -177,12 +187,34 @@ impl StdError for InvalidUrl {
     }
 }
 
+lazy_static! {
+    static ref ADDR_CACHE: RwLock<HashMap<String, SocketAddr>> = {
+        let h = HashMap::new();
+        RwLock::new(h)
+    };
+}
+
+pub fn get_socket_addr_cache(key: &str) -> Option<SocketAddr> {
+    if let Ok(cache) = ADDR_CACHE.read() {
+        return cache.get(key).cloned()
+    }
+    None
+}
+
+fn cache_socket_addr(key: String, socket_addr: SocketAddr) {
+    if let Ok(mut cache) = ADDR_CACHE.write() {
+        cache.insert(key, socket_addr);
+    }
+}
+
 /// A Future representing work to connect to a URL.
 #[must_use = "futures do nothing unless polled"]
 pub struct HttpConnecting {
+    host: String,
     state: State,
     handle: Handle,
     keep_alive_timeout: Option<Duration>,
+    is_reranking: bool
 }
 
 enum State {
@@ -197,10 +229,14 @@ impl Future for HttpConnecting {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let mut domain = "".to_owned();
         loop {
             let state;
             match self.state {
                 State::Lazy(ref executor, ref mut host, port) => {
+                    if !host.is_empty() {
+                        domain = host.to_owned();
+                    }
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, port) {
@@ -214,19 +250,29 @@ impl Future for HttpConnecting {
                         state = State::Resolving(oneshot::spawn(work, executor));
                     }
                 },
-                State::Resolving(ref mut future) => {
-                    match try!(future.poll()) {
-                        Async::NotReady => return Ok(Async::NotReady),
-                        Async::Ready(addrs) => {
+                State::Resolving(ref mut query) => {
+                    match dns::IpAddrs::try_parse_custom(&domain, self.is_reranking) {
+                        Some(addrs) => {
                             state = State::Connecting(ConnectingTcp {
-                                addrs: addrs,
+                                addrs,
                                 current: None,
                             })
+                        },
+                        None => {
+                            match try!(query.poll()) {
+                                Async::NotReady => return Ok(Async::NotReady),
+                                Async::Ready(addrs) => {
+                                    state = State::Connecting(ConnectingTcp {
+                                        addrs: addrs,
+                                        current: None,
+                                    })
+                                }
+                            };
                         }
-                    };
+                    }
                 },
                 State::Connecting(ref mut c) => {
-                    let sock = try_ready!(c.poll(&self.handle));
+                    let sock = try_ready!(c.poll(&self.handle, self.host.clone()));
 
                     if let Some(dur) = self.keep_alive_timeout {
                         sock.set_keepalive(Some(dur))?;
@@ -254,24 +300,34 @@ struct ConnectingTcp {
 
 impl ConnectingTcp {
     // not a Future, since passing a &Handle to poll
-    fn poll(&mut self, handle: &Handle) -> Poll<TcpStream, io::Error> {
+    fn poll(&mut self, handle: &Handle, host: String) -> Poll<TcpStream, io::Error> {
         let mut err = None;
+        let mut last_addr = None;
         loop {
             if let Some(ref mut current) = self.current {
                 match current.poll() {
-                    Ok(ok) => return Ok(ok),
+                    Ok(ok) => {
+                        if let Some(addr) = last_addr {
+                            cache_socket_addr(host, addr);
+                        }
+                        return Ok(ok)
+                    },
                     Err(e) => {
                         trace!("connect error {:?}", e);
                         err = Some(e);
                         if let Some(addr) = self.addrs.next() {
-                            debug!("connecting to {}", addr);
+                            last_addr = Some(addr);
+                            debug!("connecting to {:?}", addr);
+
                             *current = TcpStream::connect(&addr, handle);
                             continue;
                         }
                     }
                 }
             } else if let Some(addr) = self.addrs.next() {
-                debug!("connecting to {}", addr);
+                debug!("connecting to {:?}", addr);
+                last_addr = Some(addr);
+
                 self.current = Some(TcpStream::connect(&addr, handle));
                 continue;
             }

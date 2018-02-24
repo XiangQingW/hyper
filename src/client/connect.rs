@@ -2,7 +2,9 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::io;
 use std::mem;
-//use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::RwLock;
 
 use futures::{Future, Poll, Async};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -109,6 +111,7 @@ impl Service for HttpConnector {
         };
 
         HttpConnecting {
+            host: host.into(),
             state: State::Lazy(self.dns.clone(), host.into(), port),
             handle: self.handle.clone(),
         }
@@ -118,6 +121,7 @@ impl Service for HttpConnector {
 #[inline]
 fn invalid_url(err: InvalidUrl, handle: &Handle) -> HttpConnecting {
     HttpConnecting {
+        host: "".into(),
         state: State::Error(Some(io::Error::new(io::ErrorKind::InvalidInput, err))),
         handle: handle.clone(),
     }
@@ -146,8 +150,29 @@ impl StdError for InvalidUrl {
     }
 }
 
+lazy_static! {
+    static ref ADDR_CACHE: RwLock<HashMap<String, SocketAddr>> = {
+        let h = HashMap::new();
+        RwLock::new(h)
+    };
+}
+
+pub fn get_socket_addr_cache(key: &str) -> Option<SocketAddr> {
+    if let Ok(cache) = ADDR_CACHE.read() {
+        return cache.get(key).cloned()
+    }
+    None
+}
+
+fn cache_socket_addr(key: String, socket_addr: SocketAddr) {
+    if let Ok(mut cache) = ADDR_CACHE.write() {
+        cache.insert(key, socket_addr);
+    }
+}
+
 /// A Future representing work to connect to a URL.
 pub struct HttpConnecting {
+    host: String,
     state: State,
     handle: Handle,
 }
@@ -182,7 +207,8 @@ impl Future for HttpConnecting {
                         }
                     };
                 },
-                State::Connecting(ref mut c) => return c.poll(&self.handle).map_err(From::from),
+                State::Connecting(ref mut c) =>
+                    return c.poll(&self.handle, self.host.clone()).map_err(From::from),
                 State::Error(ref mut e) => return Err(e.take().expect("polled more than once")),
             }
             self.state = state;
@@ -203,16 +229,23 @@ struct ConnectingTcp {
 
 impl ConnectingTcp {
     // not a Future, since passing a &Handle to poll
-    fn poll(&mut self, handle: &Handle) -> Poll<TcpStream, io::Error> {
+    fn poll(&mut self, handle: &Handle, host: String) -> Poll<TcpStream, io::Error> {
         let mut err = None;
+        let mut last_addr = None;
         loop {
             if let Some(ref mut current) = self.current {
                 match current.poll() {
-                    Ok(ok) => return Ok(ok),
+                    Ok(ok) => {
+                        if let Some(addr) = last_addr {
+                            cache_socket_addr(host, addr);
+                        }
+                        return Ok(ok)
+                    },
                     Err(e) => {
                         trace!("connect error {:?}", e);
                         err = Some(e);
                         if let Some(addr) = self.addrs.next() {
+                            last_addr = Some(addr);
                             debug!("connecting to {:?}", addr);
                             *current = TcpStream::connect(&addr, handle);
                             continue;
@@ -221,6 +254,7 @@ impl ConnectingTcp {
                 }
             } else if let Some(addr) = self.addrs.next() {
                 debug!("connecting to {:?}", addr);
+                last_addr = Some(addr);
                 self.current = Some(TcpStream::connect(&addr, handle));
                 continue;
             }

@@ -223,10 +223,14 @@ impl Future for HttpConnecting {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let mut domain = "".to_owned();
         loop {
             let state;
             match self.state {
                 State::Lazy(ref executor, ref mut host, port) => {
+                    if !host.is_empty() {
+                        domain = host.to_owned();
+                    }
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, port) {
@@ -240,16 +244,26 @@ impl Future for HttpConnecting {
                         state = State::Resolving(oneshot::spawn(work, executor));
                     }
                 },
-                State::Resolving(ref mut future) => {
-                    match try!(future.poll()) {
-                        Async::NotReady => return Ok(Async::NotReady),
-                        Async::Ready(addrs) => {
+                State::Resolving(ref mut query) => {
+                    match dns::IpAddrs::try_parse_custom(&domain) {
+                        Some(addrs) => {
                             state = State::Connecting(ConnectingTcp {
-                                addrs: addrs,
+                                addrs,
                                 current: None,
                             })
+                        },
+                        None => {
+                            match try!(query.poll()) {
+                                Async::NotReady => return Ok(Async::NotReady),
+                                Async::Ready(addrs) => {
+                                    state = State::Connecting(ConnectingTcp {
+                                        addrs: addrs,
+                                        current: None,
+                                    })
+                                }
+                            };
                         }
-                    };
+                    }
                 },
                 State::Connecting(ref mut c) => {
                     let sock = try_ready!(c.poll(&self.handle, self.host.clone()));

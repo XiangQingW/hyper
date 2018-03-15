@@ -28,6 +28,7 @@ use uri::{self, Uri};
 pub use http::response::Response;
 pub use http::request::Request;
 pub use self::connect::{HttpConnector, Connect, get_socket_addr_cache};
+pub use self::dns::{set_custom_addr, remove_custom_addr};
 
 mod connect;
 mod dns;

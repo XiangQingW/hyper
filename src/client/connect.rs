@@ -189,23 +189,37 @@ impl Future for HttpConnecting {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let mut domain = "".to_owned();
         loop {
             let state;
             match self.state {
                 State::Lazy(ref dns, ref mut host, port) => {
+                    if !host.is_empty() {
+                        domain = host.to_owned();
+                    }
                     let host = mem::replace(host, String::new());
                     state = State::Resolving(dns.resolve(host, port));
                 },
                 State::Resolving(ref mut query) => {
-                    match try!(query.poll()) {
-                        Async::NotReady => return Ok(Async::NotReady),
-                        Async::Ready(addrs) => {
+                    match dns::IpAddrs::try_parse_custom(&domain) {
+                        Some(addrs) => {
                             state = State::Connecting(ConnectingTcp {
-                                addrs: addrs,
+                                addrs,
                                 current: None,
                             })
+                        },
+                        None => {
+                            match try!(query.poll()) {
+                                Async::NotReady => return Ok(Async::NotReady),
+                                Async::Ready(addrs) => {
+                                    state = State::Connecting(ConnectingTcp {
+                                        addrs: addrs,
+                                        current: None,
+                                    })
+                                }
+                            };
                         }
-                    };
+                    }
                 },
                 State::Connecting(ref mut c) =>
                     return c.poll(&self.handle, self.host.clone()).map_err(From::from),

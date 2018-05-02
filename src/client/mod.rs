@@ -25,7 +25,7 @@ use version::HttpVersion;
 pub use proto::response::Response;
 pub use proto::request::Request;
 pub use self::connect::{HttpConnector, Connect, get_socket_addr_cache};
-pub use self::dns::{set_custom_addr, remove_custom_addr};
+pub use self::dns::{set_custom_addr, remove_custom_addr, RERANK_FRAGMENT};
 
 use self::background::{bg, Background};
 

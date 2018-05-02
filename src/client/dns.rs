@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use ::futures::{Async, Future, Poll};
+use Uri;
+
+pub const RERANK_FRAGMENT: &'static str = "947afd3b7a_rerank";
 
 pub struct Work {
     host: String,
@@ -44,18 +47,6 @@ impl IpAddrs {
         }
         None
     }
-
-    pub fn try_parse_custom(domain: &str) -> Option<IpAddrs> {
-        match get_custom_addr(domain) {
-            Some(addr) => {
-                debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);
-                Some(IpAddrs {
-                    iter: vec![addr].into_iter()
-                })
-            },
-            None => None,
-        }
-    }
 }
 
 lazy_static! {
@@ -72,6 +63,13 @@ fn get_custom_addr(domain: &str) -> Option<SocketAddr> {
     }
 }
 
+pub(crate) fn is_reranking(uri: &Uri) -> bool {
+    match uri.fragment() {
+        Some(fragment) if fragment == RERANK_FRAGMENT => true,
+        _ => false,
+    }
+}
+
 pub fn set_custom_addr(domain: String, addr: &str) {
     if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
         if let Ok(addr) = addr.parse::<Ipv4Addr>() {
@@ -85,6 +83,24 @@ pub fn set_custom_addr(domain: String, addr: &str) {
 pub fn remove_custom_addr(domain: &str) {
     if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
         addrs.remove(domain);
+    }
+}
+
+impl IpAddrs {
+    pub fn try_parse_custom(domain: &str, is_reranking: bool) -> Option<IpAddrs> {
+        if is_reranking {
+            return None;
+        }
+
+        match get_custom_addr(domain) {
+            Some(addr) => {
+                debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);
+                Some(IpAddrs {
+                    iter: vec![addr].into_iter()
+                })
+            },
+            None => None,
+        }
     }
 }
 

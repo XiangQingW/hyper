@@ -140,11 +140,15 @@ impl Service for HttpConnector {
             },
         };
 
+        let is_reranking = super::dns::is_reranking(&uri);
+        debug!("is_reranking: {:?}", is_reranking);
+
         HttpConnecting {
             host: host.into(),
             state: State::Lazy(self.executor.clone(), host.into(), port),
             handle: self.handle.clone(),
             keep_alive_timeout: self.keep_alive_timeout,
+            is_reranking,
         }
     }
 }
@@ -156,6 +160,7 @@ fn invalid_url(err: InvalidUrl, handle: &Handle) -> HttpConnecting {
         state: State::Error(Some(io::Error::new(io::ErrorKind::InvalidInput, err))),
         handle: handle.clone(),
         keep_alive_timeout: None,
+        is_reranking: false,
     }
 }
 
@@ -209,6 +214,7 @@ pub struct HttpConnecting {
     state: State,
     handle: Handle,
     keep_alive_timeout: Option<Duration>,
+    is_reranking: bool
 }
 
 enum State {
@@ -245,7 +251,7 @@ impl Future for HttpConnecting {
                     }
                 },
                 State::Resolving(ref mut query) => {
-                    match dns::IpAddrs::try_parse_custom(&domain) {
+                    match dns::IpAddrs::try_parse_custom(&domain, self.is_reranking) {
                         Some(addrs) => {
                             state = State::Connecting(ConnectingTcp {
                                 addrs,

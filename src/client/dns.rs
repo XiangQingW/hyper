@@ -6,6 +6,9 @@ use std::sync::RwLock;
 
 use ::futures::{Future, Poll};
 use ::futures_cpupool::{CpuPool, CpuFuture};
+use Uri;
+
+pub const RERANK_FRAGMENT: &'static str = "947afd3b7a_rerank";
 
 #[derive(Clone)]
 pub struct Dns {
@@ -53,6 +56,13 @@ fn get_custom_addr(domain: &str) -> Option<SocketAddr> {
     }
 }
 
+pub(crate) fn is_reranking(uri: &Uri) -> bool {
+    match uri.fragment() {
+        Some(fragment) if fragment == RERANK_FRAGMENT => true,
+        _ => false,
+    }
+}
+
 pub fn set_custom_addr(domain: String, addr: &str) {
     if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
         if let Ok(addr) = addr.parse::<Ipv4Addr>() {
@@ -70,7 +80,11 @@ pub fn remove_custom_addr(domain: &str) {
 }
 
 impl IpAddrs {
-    pub fn try_parse_custom(domain: &str) -> Option<IpAddrs> {
+    pub fn try_parse_custom(domain: &str, is_reranking: bool) -> Option<IpAddrs> {
+        if is_reranking {
+            return None;
+        }
+
         match get_custom_addr(domain) {
             Some(addr) => {
                 debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);

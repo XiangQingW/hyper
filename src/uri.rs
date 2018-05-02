@@ -198,8 +198,9 @@ impl Uri {
         self.scheme_end.is_some()
     }
 
-    #[cfg(test)]
-    fn fragment(&self) -> Option<&str> {
+    /// Get the fragment of thi `Uri`, starting after the `#`
+    #[inline]
+    pub fn fragment(&self) -> Option<&str> {
         self.fragment_start.map(|start| {
             // +1 to remove the '#'
            &self.source[start + 1..]

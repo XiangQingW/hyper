@@ -7,6 +7,8 @@ use std::time::Duration;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::RwLock;
+use std::time::Instant;
+use std::cell::RefCell;
 
 use futures::{Future, Poll, Async};
 use futures::future::{Executor, ExecuteError};
@@ -224,6 +226,23 @@ enum State {
     Error(Option<io::Error>),
 }
 
+pub fn get_task_connection_infos() -> (Option<Duration>, Option<Duration>, Option<Duration>) {
+    CONNECTION_INFOS.with(|info| {
+        info.clone().into_inner()
+    })
+}
+
+pub fn set_tls_duration(dur: Duration) {
+    CONNECTION_INFOS.with(|info| {
+        let mut info_mut = info.borrow_mut();
+        info_mut.2 = Some(dur);
+    });
+}
+
+task_local!(static MARK_TIMESTAMP: RefCell<Instant> = RefCell::new(Instant::now()));
+task_local!(static CONNECTION_INFOS: RefCell<(Option<Duration>, Option<Duration>, Option<Duration>)>
+        = RefCell::new((None, None, None,)));
+
 impl Future for HttpConnecting {
     type Item = TcpStream;
     type Error = io::Error;
@@ -237,6 +256,8 @@ impl Future for HttpConnecting {
                     if !host.is_empty() {
                         domain = host.to_owned();
                     }
+
+                    MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, port) {
@@ -253,6 +274,8 @@ impl Future for HttpConnecting {
                 State::Resolving(ref mut query) => {
                     match dns::IpAddrs::try_parse_custom(&domain, self.is_reranking) {
                         Some(addrs) => {
+                            MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
+
                             state = State::Connecting(ConnectingTcp {
                                 addrs,
                                 current: None,
@@ -262,6 +285,15 @@ impl Future for HttpConnecting {
                             match try!(query.poll()) {
                                 Async::NotReady => return Ok(Async::NotReady),
                                 Async::Ready(addrs) => {
+                                    CONNECTION_INFOS.with(|info| {
+                                        let mut info_mut = info.borrow_mut();
+                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
+                                            let elap = ts.borrow().clone();
+                                            *ts.borrow_mut() = Instant::now();
+                                            elap
+                                        }).elapsed());
+                                    });
+
                                     state = State::Connecting(ConnectingTcp {
                                         addrs: addrs,
                                         current: None,
@@ -273,6 +305,15 @@ impl Future for HttpConnecting {
                 },
                 State::Connecting(ref mut c) => {
                     let sock = try_ready!(c.poll(&self.handle, self.host.clone()));
+
+                    CONNECTION_INFOS.with(|info| {
+                        let mut info_mut = info.borrow_mut();
+                        info_mut.1 = Some(MARK_TIMESTAMP.with(|ts| {
+                            let elap = ts.borrow().clone();
+                            *ts.borrow_mut() = Instant::now();
+                            elap
+                        }).elapsed());
+                    });
 
                     if let Some(dur) = self.keep_alive_timeout {
                         sock.set_keepalive(Some(dur))?;

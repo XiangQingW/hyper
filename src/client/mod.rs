@@ -25,7 +25,7 @@ use version::HttpVersion;
 
 pub use proto::response::Response;
 pub use proto::request::Request;
-pub use self::connect::{HttpConnector, Connect, get_socket_addr_cache};
+pub use self::connect::{HttpConnector, Connect, get_socket_addr_cache, get_task_connection_infos, set_tls_duration};
 pub use self::dns::{set_custom_addr, remove_custom_addr, RERANK_FRAGMENT};
 
 use self::background::{bg, Background};
@@ -193,7 +193,7 @@ where C: Connect,
 
     //TODO: replace with `impl Future` when stable
     fn send_request(&self, req: Request<B>, domain: &Uri) -> Box<Future<Item=Response, Error=ClientError<B>>> {
-    //fn send_request(&self, req: Request<B>, domain: &Uri) -> Box<Future<Item=Response, Error=::Error>> {
+        //fn send_request(&self, req: Request<B>, domain: &Uri) -> Box<Future<Item=Response, Error=::Error>> {
         let url = req.uri().clone();
         let checkout = self.pool.checkout(domain.as_ref());
         let connect = {

@@ -145,12 +145,15 @@ impl Service for HttpConnector {
         let is_reranking = super::dns::is_reranking(&uri);
         debug!("is_reranking: {:?}", is_reranking);
 
+        let ip = super::dns::get_addrs_by_uri(&uri);
+
         HttpConnecting {
             host: host.into(),
             state: State::Lazy(self.executor.clone(), host.into(), port),
             handle: self.handle.clone(),
             keep_alive_timeout: self.keep_alive_timeout,
             is_reranking,
+            addr_used_when_exist: ip
         }
     }
 }
@@ -163,6 +166,7 @@ fn invalid_url(err: InvalidUrl, handle: &Handle) -> HttpConnecting {
         handle: handle.clone(),
         keep_alive_timeout: None,
         is_reranking: false,
+        addr_used_when_exist: None
     }
 }
 
@@ -216,7 +220,8 @@ pub struct HttpConnecting {
     state: State,
     handle: Handle,
     keep_alive_timeout: Option<Duration>,
-    is_reranking: bool
+    is_reranking: bool,
+    addr_used_when_exist: Option<SocketAddr>
 }
 
 enum State {
@@ -272,7 +277,18 @@ impl Future for HttpConnecting {
                     }
                 },
                 State::Resolving(ref mut query) => {
-                    match dns::IpAddrs::try_parse_custom(&domain, self.is_reranking) {
+                    let is_reranking = self.is_reranking;
+                    let try_get_addr = |domain: &str, addr: Option<&SocketAddr>| -> Option<super::dns::IpAddrs> {
+                        match addr {
+                            Some(addr) => {
+                                debug!("get addr from fragment: addr= {:?}", addr);
+                                Some(super::dns::IpAddrs::new(addr.clone()))
+                            },
+                            None => dns::IpAddrs::try_parse_custom(domain, is_reranking),
+                        }
+                    };
+
+                    match try_get_addr(&domain, self.addr_used_when_exist.as_ref()) {
                         Some(addrs) => {
                             MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
 

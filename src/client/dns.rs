@@ -8,6 +8,7 @@ use ::futures::{Async, Future, Poll};
 use Uri;
 
 pub const RERANK_FRAGMENT: &'static str = "947afd3b7a_rerank";
+pub const IP_FRAGMENT_PREFIX: &'static str = "430BB5C318_ip:";
 
 pub struct Work {
     host: String,
@@ -47,6 +48,12 @@ impl IpAddrs {
         }
         None
     }
+
+    pub fn new(addr: SocketAddr) -> Self {
+        IpAddrs {
+            iter: vec![addr].into_iter()
+        }
+    }
 }
 
 lazy_static! {
@@ -63,6 +70,19 @@ fn get_custom_addr(domain: &str) -> Option<SocketAddr> {
     }
 }
 
+pub(crate) fn get_addrs_by_uri(uri: &Uri) -> Option<SocketAddr> {
+    let fragment = uri.fragment()?;
+
+    if !fragment.starts_with(IP_FRAGMENT_PREFIX) {
+        return None;
+    }
+
+    let elements: Vec<_> = fragment.split(':').collect();
+    let ip = elements.get(1)?;
+
+    get_addr_by_ip(ip)
+}
+
 pub(crate) fn is_reranking(uri: &Uri) -> bool {
     match uri.fragment() {
         Some(fragment) if fragment == RERANK_FRAGMENT => true,
@@ -70,11 +90,23 @@ pub(crate) fn is_reranking(uri: &Uri) -> bool {
     }
 }
 
-pub fn set_custom_addr(domain: String, addr: &str) {
-    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
-        if let Ok(addr) = addr.parse::<Ipv4Addr>() {
+fn get_addr_by_ip(ip: &str) -> Option<SocketAddr> {
+    match ip.parse::<Ipv4Addr>() {
+        Ok(addr) => {
             let addr = SocketAddrV4::new(addr, 443);
             let addr = SocketAddr::V4(addr);
+            Some(addr)
+        },
+        Err(err) => {
+            warn!("get addr by ip failed: err= {:?} ip= {:?}", err, ip);
+            None
+        }
+    }
+}
+
+pub fn set_custom_addr(domain: String, addr: &str) {
+    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
+        if let Some(addr) = get_addr_by_ip(addr) {
             addrs.insert(domain, addr);
         }
     }
@@ -95,9 +127,7 @@ impl IpAddrs {
         match get_custom_addr(domain) {
             Some(addr) => {
                 debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);
-                Some(IpAddrs {
-                    iter: vec![addr].into_iter()
-                })
+                Some(IpAddrs::new(addr))
             },
             None => None,
         }

@@ -209,7 +209,7 @@ impl<'a, 'b> Formatter<'a, 'b> {
                 try!(f.write_str(name));
                 try!(f.write_str(": "));
                 try!(fmt::Display::fmt(line, f));
-                f.write_str(", ")
+                f.write_str("\r\n")
             },
             Multi::Join(ref mut first, ref mut f) => {
                 if !*first {

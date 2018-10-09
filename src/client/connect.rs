@@ -198,6 +198,22 @@ lazy_static! {
         let h = HashMap::new();
         RwLock::new(h)
     };
+    static ref DOMAIN2DNS_ADDRS: RwLock<HashMap<String, dns::IpAddrs>> = {
+        RwLock::new(HashMap::new())
+    };
+}
+
+fn get_domain2dns_addrs(domain: &str) -> Option<dns::IpAddrs> {
+    match DOMAIN2DNS_ADDRS.read() {
+        Ok(addrs) => addrs.get(domain).cloned(),
+        Err(_) => None
+    }
+}
+
+fn set_domain2dns_addrs(domain: String, addrs: dns::IpAddrs) {
+    if let Ok(mut cached_addrs) = DOMAIN2DNS_ADDRS.write() {
+        cached_addrs.insert(domain, addrs);
+    }
 }
 
 pub fn get_socket_addr_cache(key: &str) -> Option<SocketAddr> {
@@ -298,24 +314,44 @@ impl Future for HttpConnecting {
                             })
                         },
                         None => {
-                            match try!(query.poll()) {
-                                Async::NotReady => return Ok(Async::NotReady),
-                                Async::Ready(addrs) => {
-                                    CONNECTION_INFOS.with(|info| {
-                                        let mut info_mut = info.borrow_mut();
-                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
-                                            let elap = ts.borrow().clone();
-                                            *ts.borrow_mut() = Instant::now();
-                                            elap
-                                        }).elapsed());
-                                    });
+                            match query.poll() {
+                                Ok(result) => {
+                                    match result {
+                                        Async::NotReady => return Ok(Async::NotReady),
+                                        Async::Ready(addrs) => {
+                                            CONNECTION_INFOS.with(|info| {
+                                                let mut info_mut = info.borrow_mut();
+                                                info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
+                                                    let elap = ts.borrow().clone();
+                                                    *ts.borrow_mut() = Instant::now();
+                                                    elap
+                                                }).elapsed());
+                                            });
 
+                                            debug!("resolve dns success: host= {:?} addrs= {:?}", self.host, addrs);
+                                            set_domain2dns_addrs(self.host.to_owned(), addrs.clone());
+
+                                            state = State::Connecting(ConnectingTcp {
+                                                addrs,
+                                                current: None,
+                                            })
+                                        }
+                                    }
+                                },
+                                Err(err) => {
+                                    warn!("resolve dns failed: err= {:?}", err);
+                                    let cached_addrs = try!(get_domain2dns_addrs(&self.host).ok_or_else(|| err));
+                                    if cached_addrs.iter.as_slice().is_empty() {
+                                        warn!("cached addrs is empty.");
+                                        return Err(::std::io::Error::new(::std::io::ErrorKind::Other, "cached addrs is empty"));
+                                    }
+                                    debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
                                     state = State::Connecting(ConnectingTcp {
-                                        addrs: addrs,
-                                        current: None,
+                                        addrs: cached_addrs,
+                                        current: None
                                     })
                                 }
-                            };
+                            }
                         }
                     }
                 },

@@ -81,7 +81,15 @@ pub(crate) fn get_addrs_by_uri(uri: &Uri) -> Option<SocketAddr> {
     let elements: Vec<_> = fragment.split(':').collect();
     let ip = elements.get(1)?;
 
-    get_addr_by_ip(ip)
+    let port = uri.scheme().map(|scheme| {
+        if scheme == "http" {
+           80
+        } else {
+           443
+        }
+    });
+
+    get_addr_by_ip(ip, port)
 }
 
 pub(crate) fn is_reranking(uri: &Uri) -> bool {
@@ -91,10 +99,10 @@ pub(crate) fn is_reranking(uri: &Uri) -> bool {
     }
 }
 
-fn get_addr_by_ip(ip: &str) -> Option<SocketAddr> {
+fn get_addr_by_ip(ip: &str, port: Option<u16>) -> Option<SocketAddr> {
     match ip.parse::<Ipv4Addr>() {
         Ok(addr) => {
-            let addr = SocketAddrV4::new(addr, 443);
+            let addr = SocketAddrV4::new(addr, port.unwrap_or_else(|| 443));
             let addr = SocketAddr::V4(addr);
             Some(addr)
         },
@@ -107,7 +115,7 @@ fn get_addr_by_ip(ip: &str) -> Option<SocketAddr> {
 
 pub fn set_custom_addr(domain: String, addr: &str) {
     if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
-        if let Some(addr) = get_addr_by_ip(addr) {
+        if let Some(addr) = get_addr_by_ip(addr, None) {
             addrs.insert(domain, addr);
         }
     }

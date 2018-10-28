@@ -142,9 +142,6 @@ impl Service for HttpConnector {
             },
         };
 
-        let is_reranking = super::dns::is_reranking(&uri);
-        debug!("is_reranking: {:?}", is_reranking);
-
         let ip = super::dns::get_addrs_by_uri(&uri);
 
         HttpConnecting {
@@ -152,8 +149,8 @@ impl Service for HttpConnector {
             state: State::Lazy(self.executor.clone(), host.into(), port),
             handle: self.handle.clone(),
             keep_alive_timeout: self.keep_alive_timeout,
-            is_reranking,
-            addr_used_when_exist: ip
+            addr_used_when_exist: ip,
+            port
         }
     }
 }
@@ -165,8 +162,8 @@ fn invalid_url(err: InvalidUrl, handle: &Handle) -> HttpConnecting {
         state: State::Error(Some(io::Error::new(io::ErrorKind::InvalidInput, err))),
         handle: handle.clone(),
         keep_alive_timeout: None,
-        is_reranking: false,
-        addr_used_when_exist: None
+        addr_used_when_exist: None,
+        port: 80
     }
 }
 
@@ -236,8 +233,8 @@ pub struct HttpConnecting {
     state: State,
     handle: Handle,
     keep_alive_timeout: Option<Duration>,
-    is_reranking: bool,
-    addr_used_when_exist: Option<SocketAddr>
+    addr_used_when_exist: Option<SocketAddr>,
+    port: u16
 }
 
 enum State {
@@ -293,14 +290,14 @@ impl Future for HttpConnecting {
                     }
                 },
                 State::Resolving(ref mut query) => {
-                    let is_reranking = self.is_reranking;
+                    let port = self.port;
                     let try_get_addr = |domain: &str, addr: Option<&SocketAddr>| -> Option<super::dns::IpAddrs> {
                         match addr {
                             Some(addr) => {
                                 debug!("get addr from fragment: addr= {:?}", addr);
                                 Some(super::dns::IpAddrs::new(addr.clone()))
                             },
-                            None => dns::IpAddrs::try_parse_custom(domain, is_reranking),
+                            None => dns::IpAddrs::try_parse_custom(domain, port),
                         }
                     };
 

@@ -92,13 +92,6 @@ pub(crate) fn get_addrs_by_uri(uri: &Uri) -> Option<SocketAddr> {
     get_addr_by_ip(ip, port)
 }
 
-pub(crate) fn is_reranking(uri: &Uri) -> bool {
-    match uri.fragment() {
-        Some(fragment) if fragment == RERANK_FRAGMENT => true,
-        _ => false,
-    }
-}
-
 fn get_addr_by_ip(ip: &str, port: Option<u16>) -> Option<SocketAddr> {
     match ip.parse::<Ipv4Addr>() {
         Ok(addr) => {
@@ -128,14 +121,16 @@ pub fn remove_custom_addr(domain: &str) {
 }
 
 impl IpAddrs {
-    pub fn try_parse_custom(domain: &str, is_reranking: bool) -> Option<IpAddrs> {
-        if is_reranking {
-            return None;
-        }
-
+    pub fn try_parse_custom(domain: &str, port: u16) -> Option<IpAddrs> {
         match get_custom_addr(domain) {
-            Some(addr) => {
-                debug!("get custom addr: domain= {:?} addr= {:?}", domain, addr);
+            Some(mut addr) => {
+                debug!("get custom addr: domain= {:?} addr= {:?} port= {:?}", domain, addr, port);
+
+                if addr.port() != port {
+                    debug!("modify addr port: domain= {:?} addr= {:?} port= {:?}", domain, addr, port);
+                    addr.set_port(port);
+                }
+
                 Some(IpAddrs::new(addr))
             },
             None => None,

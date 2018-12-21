@@ -6,6 +6,7 @@
 //!   `HttpConnector`.
 //! - The [`Resolve`](Resolve) trait and related types to build a custom
 //!   resolver for use with the `HttpConnector`.
+#![allow(missing_docs)]
 use std::{fmt, io, vec};
 use std::error::Error;
 use std::net::{
@@ -214,6 +215,7 @@ impl Future for GaiBlocking {
     }
 }
 
+#[derive(Clone, Debug)]
 pub(super) struct IpAddrs {
     iter: vec::IntoIter<SocketAddr>,
 }
@@ -329,6 +331,91 @@ impl Future for TokioThreadpoolGaiFuture {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         }
+    }
+}
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+use http::Uri;
+
+pub const RERANK_FRAGMENT: &str = "947afd3b7a_rerank";
+pub const IP_FRAGMENT_PREFIX: &str = "430BB5C318_ip:";
+
+lazy_static! {
+    static ref CUSTOM_DOMAIN2ADDR: RwLock<HashMap<String, SocketAddr>> = {
+        let h = HashMap::new();
+        RwLock::new(h)
+    };
+}
+
+fn get_custom_addr(domain: &str) -> Option<SocketAddr> {
+    match CUSTOM_DOMAIN2ADDR.read() {
+        Ok(addrs) => addrs.get(domain).cloned(),
+        _ => None,
+    }
+}
+
+pub(super) fn get_addrs_by_uri(uri: &Uri) -> Option<SocketAddr> {
+    let fragment = uri.fragment()?;
+
+    if !fragment.starts_with(IP_FRAGMENT_PREFIX) {
+        return None;
+    }
+
+    let elements: Vec<_> = fragment.split(':').collect();
+    let ip = elements.get(1)?;
+
+    let port = uri.scheme_part().map(|scheme| {
+        if scheme.as_str() == "http" {
+            80
+        } else {
+            443
+        }
+    });
+
+    get_addr_by_ip(ip, port)
+}
+
+fn get_addr_by_ip(ip: &str, port: Option<u16>) -> Option<SocketAddr> {
+    match ip.parse::<Ipv4Addr>() {
+        Ok(addr) => {
+            let addr = SocketAddrV4::new(addr, port.unwrap_or_else(|| 443));
+            let addr = SocketAddr::V4(addr);
+            Some(addr)
+        }
+        Err(err) => {
+            warn!("get addr by ip failed: err= {:?} ip= {:?}", err, ip);
+            None
+        }
+    }
+}
+
+pub fn set_custom_addr(domain: String, addr: &str) {
+    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
+        if let Some(addr) = get_addr_by_ip(addr, None) {
+            addrs.insert(domain, addr);
+        }
+    }
+}
+
+pub fn remove_custom_addr(domain: &str) {
+    if let Ok(mut addrs) = CUSTOM_DOMAIN2ADDR.write() {
+        addrs.remove(domain);
+    }
+}
+
+impl IpAddrs {
+    pub fn try_parse_custom(domain: &str, port: u16) -> Option<IpAddrs> {
+        get_custom_addr(domain).map(|mut addr| {
+            debug!("get custom addr: domain= {:?} addr= {:?} port= {:?}", domain, addr, port);
+
+            if addr.port() != port {
+                debug!("modify addr port: domain= {:?} addr= {:?} port= {:?}", domain, addr, port);
+                addr.set_port(port);
+            }
+
+            IpAddrs::new(vec![addr])
+        })
     }
 }
 

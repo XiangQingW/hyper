@@ -37,6 +37,9 @@ extern crate time;
 #[cfg(feature = "runtime")] extern crate tokio_timer;
 extern crate want;
 
+#[macro_use]
+extern crate lazy_static;
+
 #[cfg(all(test, feature = "nightly"))]
 extern crate test;
 

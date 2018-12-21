@@ -37,6 +37,7 @@ tokio-tcp = { version = "0.1", optional = true }
 tokio-threadpool = { version = "0.1.3", optional = true }
 tokio-timer = { version = "0.2", optional = true }
 want = "0.0.6"
+lazy_static = "1.2.0"
 
 [dev-dependencies]
 futures-timer = "0.1"
@@ -170,3 +171,5 @@ name = "server"
 path = "tests/server.rs"
 required-features = ["runtime"]
 
+[replace]
+"http:0.1.14" = { git = "https://github.com/passchaos/http", branch = "v0.1.14-sdk" }

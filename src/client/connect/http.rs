@@ -239,6 +239,8 @@ where
             None => if dst.uri.scheme_part() == Some(&Scheme::HTTPS) { 443 } else { 80 },
         };
 
+        let addr = dns::get_addrs_by_uri(&dst.uri);
+
         HttpConnecting {
             state: State::Lazy(self.resolver.clone(), host.into(), self.local_address),
             handle: self.handle.clone(),
@@ -247,7 +249,35 @@ where
             nodelay: self.nodelay,
             port,
             reuse_address: self.reuse_address,
+            host: host.into(),
+            addr_used_when_exist: addr,
         }
+    }
+}
+
+use std::sync::RwLock;
+use std::collections::HashMap;
+
+lazy_static! {
+    static ref ADDR_CACHE: RwLock<HashMap<String, SocketAddr>> = {
+        let h = HashMap::new();
+        RwLock::new(h)
+    };
+    static ref DOMAIN2DNS_ADDRS: RwLock<HashMap<String, dns::IpAddrs>> = {
+        RwLock::new(HashMap::new())
+    };
+}
+
+fn get_domain2dns_addrs(domain: &str) -> Option<dns::IpAddrs> {
+    match DOMAIN2DNS_ADDRS.read() {
+        Ok(addrs) => addrs.get(domain).cloned(),
+        Err(_) => None,
+    }
+}
+
+fn set_domain2dns_addrs(domain: String, addrs: dns::IpAddrs) {
+    if let Ok(mut cached_addrs) = DOMAIN2DNS_ADDRS.write() {
+        cached_addrs.insert(domain, addrs);
     }
 }
 
@@ -268,6 +298,8 @@ fn invalid_url<R: Resolve>(err: InvalidUrl, handle: &Option<Handle>) -> HttpConn
         port: 0,
         happy_eyeballs_timeout: None,
         reuse_address: false,
+        host: "".into(),
+        addr_used_when_exist: None,
     }
 }
 
@@ -303,6 +335,8 @@ pub struct HttpConnecting<R: Resolve = GaiResolver> {
     nodelay: bool,
     port: u16,
     reuse_address: bool,
+    host: String,
+    addr_used_when_exist: Option<SocketAddr>,
 }
 
 enum State<R: Resolve> {
@@ -332,18 +366,61 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                     }
                 },
                 State::Resolving(ref mut future, local_addr) => {
-                    match try!(future.poll()) {
-                        Async::NotReady => return Ok(Async::NotReady),
-                        Async::Ready(addrs) => {
-                            let port = self.port;
-                            let addrs = addrs
-                                .map(|addr| SocketAddr::new(addr, port))
-                                .collect();
-                            let addrs = dns::IpAddrs::new(addrs);
-                            state = State::Connecting(ConnectingTcp::new(
-                                local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
+                    let port = self.port;
+                    let try_get_addr = |domain: &str, addr: Option<&SocketAddr>| -> Option<dns::IpAddrs> {
+                        match addr {
+                            Some(addr) => {
+                                debug!("get addr from fragment: addr= {:?}", addr);
+                                Some(dns::IpAddrs::new(vec![addr.clone()]))
+                            }
+                            None => dns::IpAddrs::try_parse_custom(domain, port),
                         }
                     };
+
+                    match try_get_addr(&self.host, self.addr_used_when_exist.as_ref()) {
+                        Some(addrs) => {
+                            state = State::Connecting(ConnectingTcp::new(
+                                local_addr,
+                                addrs,
+                                self.happy_eyeballs_timeout,
+                                self.reuse_address,
+                            ))
+                        }
+                        None => {
+                            match future.poll() {
+                                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                                Ok(Async::Ready(addrs)) => {
+                                    let port = self.port;
+                                    let addrs = addrs
+                                        .map(|addr| SocketAddr::new(addr, port))
+                                        .collect();
+                                    let addrs = dns::IpAddrs::new(addrs);
+
+                                    debug!("resolve dns success: host= {:?} addrs= {:?}", self.host, addrs);
+                                    set_domain2dns_addrs(self.host.to_string(), addrs.clone());
+                                    state = State::Connecting(ConnectingTcp::new(
+                                        local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
+                                }
+                                Err(err) => {
+                                    warn!("resolve dns failed: err= {:?}", err);
+                                    let cached_addrs = try!(get_domain2dns_addrs(&self.host).ok_or_else(|| err));
+                                    if cached_addrs.is_empty() {
+                                        warn!("cached addrs is empty.");
+                                        use std::io;
+                                        return Err(io::Error::new(io::ErrorKind::Other, "cached adrs is empty"));
+                                    }
+
+                                    debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
+                                    state = State::Connecting(ConnectingTcp::new(
+                                        local_addr,
+                                        cached_addrs,
+                                        self.happy_eyeballs_timeout,
+                                        self.reuse_address,
+                                    ))
+                                }
+                            }
+                        }
+                    }
                 },
                 State::Connecting(ref mut c) => {
                     let sock = try_ready!(c.poll(&self.handle));
@@ -745,4 +822,3 @@ mod tests {
         }
     }
 }
-

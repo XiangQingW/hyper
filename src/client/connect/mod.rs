@@ -16,6 +16,7 @@ use tokio_io::{AsyncRead, AsyncWrite};
 #[cfg(feature = "runtime")] pub mod dns;
 #[cfg(feature = "runtime")] mod http;
 #[cfg(feature = "runtime")] pub use self::http::{HttpConnector, HttpInfo};
+pub use self::http::{get_task_connection_infos, set_tls_duration};
 
 /// Connect to a destination, returning an IO transport.
 ///
@@ -577,4 +578,3 @@ mod tests {
         assert_eq!(res2.extensions().get::<Ex2>(), Some(&Ex2("hiccup")));
     }
 }
-

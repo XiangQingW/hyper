@@ -346,6 +346,27 @@ enum State<R: Resolve> {
     Error(Option<io::Error>),
 }
 
+type ConnectionSteps = (Option<Duration>, Option<Duration>, Option<Duration>);
+
+/// get connection steps info
+pub fn get_task_connection_infos() -> ConnectionSteps {
+    CONNECTION_INFOS.with(|info| {
+        info.clone().into_inner()
+    })
+}
+
+/// set tls duration
+pub fn set_tls_duration(dur: Duration) {
+    CONNECTION_INFOS.with(|info| {
+        let mut info_mut = info.borrow_mut();
+        info_mut.2 = Some(dur);
+    });
+}
+
+use std::cell::RefCell;
+thread_local!(static MARK_TIMESTAMP: RefCell<Instant> = RefCell::new(Instant::now()));
+thread_local!(static CONNECTION_INFOS: RefCell<ConnectionSteps> = RefCell::new((None, None, None)));
+
 impl<R: Resolve> Future for HttpConnecting<R> {
     type Item = (TcpStream, Connected);
     type Error = io::Error;
@@ -355,6 +376,8 @@ impl<R: Resolve> Future for HttpConnecting<R> {
             let state;
             match self.state {
                 State::Lazy(ref resolver, ref mut host, local_addr) => {
+                    MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
+
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, self.port) {
@@ -379,6 +402,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                     match try_get_addr(&self.host, self.addr_used_when_exist.as_ref()) {
                         Some(addrs) => {
+                            MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
                             state = State::Connecting(ConnectingTcp::new(
                                 local_addr,
                                 addrs,
@@ -390,6 +414,15 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                             match future.poll() {
                                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                                 Ok(Async::Ready(addrs)) => {
+                                    CONNECTION_INFOS.with(|info| {
+                                        let mut info_mut = info.borrow_mut();
+                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
+                                            let elap = ts.borrow().clone();
+                                            *ts.borrow_mut() = Instant::now();
+                                            elap
+                                        }).elapsed());
+                                    });
+
                                     let port = self.port;
                                     let addrs = addrs
                                         .map(|addr| SocketAddr::new(addr, port))
@@ -411,6 +444,15 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                     }
 
                                     debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
+
+                                    CONNECTION_INFOS.with(|info| {
+                                        let mut info_mut = info.borrow_mut();
+                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
+                                            let elap = ts.borrow().clone();
+                                            *ts.borrow_mut() = Instant::now();
+                                            elap
+                                        }).elapsed());
+                                    });
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr,
                                         cached_addrs,
@@ -436,6 +478,15 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                     };
                     let connected = Connected::new()
                         .extra(extra);
+
+                    CONNECTION_INFOS.with(|info| {
+                        let mut info_mut = info.borrow_mut();
+                        info_mut.1 = Some(MARK_TIMESTAMP.with(|ts| {
+                            let elap = ts.borrow().clone();
+                            *ts.borrow_mut() = Instant::now();
+                            elap
+                        }).elapsed());
+                    });
 
                     return Ok(Async::Ready((sock, connected)));
                 },

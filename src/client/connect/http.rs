@@ -240,6 +240,7 @@ where
         };
 
         let addr = dns::get_addrs_by_uri(&dst.uri);
+        set_connection_begin_ts();
 
         HttpConnecting {
             state: State::Lazy(self.resolver.clone(), host.into(), self.local_address),
@@ -346,26 +347,96 @@ enum State<R: Resolve> {
     Error(Option<io::Error>),
 }
 
-type ConnectionSteps = (Option<Duration>, Option<Duration>, Option<Duration>);
-
-/// get connection steps info
-pub fn get_task_connection_infos() -> ConnectionSteps {
-    CONNECTION_INFOS.with(|info| {
-        info.clone().into_inner()
-    })
+/// get connection steps pair addrs
+pub fn get_connection_pair_addrs() -> Option<(SocketAddr, SocketAddr)> {
+    PAIR_ADDRS.with(|item| item.borrow().clone())
 }
 
-/// set tls duration
-pub fn set_tls_duration(dur: Duration) {
-    CONNECTION_INFOS.with(|info| {
-        let mut info_mut = info.borrow_mut();
-        info_mut.2 = Some(dur);
-    });
+/// set connection dns resolve finished timestamp
+fn set_connection_begin_ts() {
+    CONNECTION_BEGIN_TS.with(|item| *item.borrow_mut() = Instant::now())
+}
+
+/// get connection begin timestamp
+pub fn get_connection_begin_ts() -> Instant {
+    CONNECTION_BEGIN_TS.with(|item| item.borrow().clone())
+}
+
+/// is use ip directly
+pub fn get_use_ip_directly() -> Option<bool> {
+    USE_IP_DIRECTLY.with(|item| item.borrow().clone())
+}
+
+/// set connection dns resolve finished timestamp
+fn set_dns_finished_ts() {
+    DNS_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
+}
+
+/// get connection dns resolve finished timestamp
+pub fn get_dns_finished_ts() -> Option<Instant> {
+    DNS_FINISHED_TS.with(|item| item.borrow().clone())
+}
+
+/// set connection tcp connect finished timestamp
+fn set_tcp_finished_ts() {
+    TCP_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
+}
+
+/// get connection tcp connect finished timestamp
+pub fn get_tcp_finished_ts() -> Option<Instant> {
+    TCP_FINISHED_TS.with(|item| item.borrow().clone())
+}
+
+/// set connection tls handshake finished timestamp
+pub fn set_tls_finished_ts() {
+    TLS_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
+}
+
+/// get connection tls handshake finished timestamp
+pub fn get_tls_finished_ts() -> Option<Instant> {
+    TLS_FINISHED_TS.with(|item| item.borrow().clone())
+}
+
+/// set connection alpn protocol
+pub fn set_alpn_protocol(alpn_info: Option<&str>) {
+    ALPN_PROTOCOL.with(|item| *item.borrow_mut() = alpn_info.map(|item| item.to_string()));
+}
+
+/// get connection alpn protocol
+pub fn get_alpn_protocol() -> Option<String> {
+    ALPN_PROTOCOL.with(|item| item.borrow().clone())
+}
+
+/// set connection tls version
+pub fn set_tls_protocol_version(tls_version: Option<String>) {
+    TLS_PROTOCOL_VERSION.with(|item| *item.borrow_mut() = tls_version);
+}
+
+/// get connection tls version
+pub fn get_tls_protocol_version() -> Option<String> {
+    TLS_PROTOCOL_VERSION.with(|item| item.borrow().clone())
+}
+
+/// set connection tls cipher suite
+pub fn set_tls_cipher_suite(cipher_suite: Option<String>) {
+    TLS_CIPHER_SUITE.with(|item| *item.borrow_mut() = cipher_suite);
+}
+
+/// get connection tls cipher suite
+pub fn get_tls_cipher_suite() -> Option<String> {
+    TLS_CIPHER_SUITE.with(|item| item.borrow().clone())
 }
 
 use std::cell::RefCell;
-thread_local!(static MARK_TIMESTAMP: RefCell<Instant> = RefCell::new(Instant::now()));
-thread_local!(static CONNECTION_INFOS: RefCell<ConnectionSteps> = RefCell::new((None, None, None)));
+task_local!(static PAIR_ADDRS: RefCell<Option<(SocketAddr, SocketAddr)>> = RefCell::new(None));
+task_local!(static USE_IP_DIRECTLY: RefCell<Option<bool>> = RefCell::new(None));
+task_local!(static CONNECTION_BEGIN_TS: RefCell<Instant> = RefCell::new(Instant::now()));
+task_local!(static DNS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static TCP_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static TLS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static ALPN_PROTOCOL: RefCell<Option<String>> = RefCell::new(None));
+task_local!(static TLS_PROTOCOL_VERSION: RefCell<Option<String>> = RefCell::new(None));
+task_local!(static TLS_CIPHER_SUITE: RefCell<Option<String>> = RefCell::new(None));
 
 impl<R: Resolve> Future for HttpConnecting<R> {
     type Item = (TcpStream, Connected);
@@ -376,11 +447,11 @@ impl<R: Resolve> Future for HttpConnecting<R> {
             let state;
             match self.state {
                 State::Lazy(ref resolver, ref mut host, local_addr) => {
-                    MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
-
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, self.port) {
+                        USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
+                        set_dns_finished_ts();
                         state = State::Connecting(ConnectingTcp::new(
                             local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
                     } else {
@@ -402,7 +473,8 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                     match try_get_addr(&self.host, self.addr_used_when_exist.as_ref()) {
                         Some(addrs) => {
-                            MARK_TIMESTAMP.with(|ts| *ts.borrow_mut() = Instant::now());
+                            USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
+                            set_dns_finished_ts();
                             state = State::Connecting(ConnectingTcp::new(
                                 local_addr,
                                 addrs,
@@ -414,15 +486,6 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                             match future.poll() {
                                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                                 Ok(Async::Ready(addrs)) => {
-                                    CONNECTION_INFOS.with(|info| {
-                                        let mut info_mut = info.borrow_mut();
-                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
-                                            let elap = ts.borrow().clone();
-                                            *ts.borrow_mut() = Instant::now();
-                                            elap
-                                        }).elapsed());
-                                    });
-
                                     let port = self.port;
                                     let addrs = addrs
                                         .map(|addr| SocketAddr::new(addr, port))
@@ -431,6 +494,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                                     debug!("resolve dns success: host= {:?} addrs= {:?}", self.host, addrs);
                                     set_domain2dns_addrs(self.host.to_string(), addrs.clone());
+                                    set_dns_finished_ts();
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
                                 }
@@ -443,16 +507,9 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                         return Err(io::Error::new(io::ErrorKind::Other, "cached adrs is empty"));
                                     }
 
+                                    USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
+                                    set_dns_finished_ts();
                                     debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
-
-                                    CONNECTION_INFOS.with(|info| {
-                                        let mut info_mut = info.borrow_mut();
-                                        info_mut.0 = Some(MARK_TIMESTAMP.with(|ts| {
-                                            let elap = ts.borrow().clone();
-                                            *ts.borrow_mut() = Instant::now();
-                                            elap
-                                        }).elapsed());
-                                    });
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr,
                                         cached_addrs,
@@ -473,20 +530,18 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                     sock.set_nodelay(self.nodelay)?;
 
+                    TCP_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()));
+                    set_tcp_finished_ts();
+
+                    let peer_addr = sock.peer_addr()?;
+                    let local_addr = sock.local_addr()?;
+                    PAIR_ADDRS.with(|item| *item.borrow_mut() = Some((peer_addr, local_addr)));
+
                     let extra = HttpInfo {
-                        remote_addr: sock.peer_addr()?,
+                        remote_addr: peer_addr,
                     };
                     let connected = Connected::new()
                         .extra(extra);
-
-                    CONNECTION_INFOS.with(|info| {
-                        let mut info_mut = info.borrow_mut();
-                        info_mut.1 = Some(MARK_TIMESTAMP.with(|ts| {
-                            let elap = ts.borrow().clone();
-                            *ts.borrow_mut() = Instant::now();
-                            elap
-                        }).elapsed());
-                    });
 
                     return Ok(Async::Ready((sock, connected)));
                 },

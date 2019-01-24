@@ -16,7 +16,7 @@ use tokio_io::{AsyncRead, AsyncWrite};
 #[cfg(feature = "runtime")] pub mod dns;
 #[cfg(feature = "runtime")] mod http;
 #[cfg(feature = "runtime")] pub use self::http::{HttpConnector, HttpInfo};
-pub use self::http::{get_task_connection_infos, set_tls_duration};
+pub use self::http::{get_connection_pair_addrs, get_connection_begin_ts, get_use_ip_directly, get_dns_finished_ts, get_tcp_finished_ts, set_tls_finished_ts, get_tls_finished_ts, set_alpn_protocol, get_alpn_protocol, set_tls_protocol_version, get_tls_protocol_version, set_tls_cipher_suite, get_tls_cipher_suite};
 
 /// Connect to a destination, returning an IO transport.
 ///

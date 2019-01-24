@@ -164,6 +164,13 @@ impl Client<(), Body> {
     }
 }
 
+use std::cell::RefCell;
+task_local!(static REUSE_IDLE_CONNECTION: RefCell<bool> = RefCell::new(false));
+/// get is reuse idle connection
+pub fn get_reuse_idle_connection() -> bool {
+    REUSE_IDLE_CONNECTION.with(|item| item.borrow().clone())
+}
+
 impl<C, B> Client<C, B>
 where C: Connect + Sync + 'static,
       C::Transport: 'static,
@@ -411,6 +418,7 @@ where C: Connect + Sync + 'static,
                     //
                     // If it *wasn't* ready yet, then the connect future will
                     // have been started...
+                    REUSE_IDLE_CONNECTION.with(|item| *item.borrow_mut() = true);
                     if connecting.started() {
                         let bg = connecting
                             .map(|_pooled| {

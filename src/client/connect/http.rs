@@ -14,6 +14,7 @@ use tokio_reactor::Handle;
 use tokio_tcp::{TcpStream, ConnectFuture};
 use tokio_timer::Delay;
 
+use crate::info::*;
 use super::{Connect, Connected, Destination};
 use super::dns::{self, GaiResolver, Resolve, TokioThreadpoolGaiResolver};
 
@@ -239,8 +240,10 @@ where
             None => if dst.uri.scheme_part() == Some(&Scheme::HTTPS) { 443 } else { 80 },
         };
 
+        let req_id = get_uri_req_id(&dst.uri);
+        set_connection_begin_ts(req_id.clone());
+
         let addr = dns::get_addrs_by_uri(&dst.uri);
-        set_connection_begin_ts();
 
         HttpConnecting {
             state: State::Lazy(self.resolver.clone(), host.into(), self.local_address),
@@ -252,6 +255,9 @@ where
             reuse_address: self.reuse_address,
             host: host.into(),
             addr_used_when_exist: addr,
+            req_id,
+            connection_begin_ts: Instant::now(),
+            dns_info: None,
         }
     }
 }
@@ -301,6 +307,9 @@ fn invalid_url<R: Resolve>(err: InvalidUrl, handle: &Option<Handle>) -> HttpConn
         reuse_address: false,
         host: "".into(),
         addr_used_when_exist: None,
+        req_id: DEFAULT_REQ_ID.to_owned(),
+        connection_begin_ts: Instant::now(),
+        dns_info: None,
     }
 }
 
@@ -336,8 +345,18 @@ pub struct HttpConnecting<R: Resolve = GaiResolver> {
     nodelay: bool,
     port: u16,
     reuse_address: bool,
+    // custom add
     host: String,
     addr_used_when_exist: Option<SocketAddr>,
+    req_id: String,
+    connection_begin_ts: Instant,
+    dns_info: Option<DnsInfo>,
+}
+
+fn create_and_set_dns_info(req_id: String, addr_resolve_type: AddrResolveType) -> DnsInfo {
+    let dns_info = DnsInfo::new(addr_resolve_type);
+    set_dns_info(req_id, dns_info.clone());
+    dns_info
 }
 
 enum State<R: Resolve> {
@@ -347,97 +366,6 @@ enum State<R: Resolve> {
     Error(Option<io::Error>),
 }
 
-/// get connection steps pair addrs
-pub fn get_connection_pair_addrs() -> Option<(SocketAddr, SocketAddr)> {
-    PAIR_ADDRS.with(|item| item.borrow().clone())
-}
-
-/// set connection dns resolve finished timestamp
-fn set_connection_begin_ts() {
-    CONNECTION_BEGIN_TS.with(|item| *item.borrow_mut() = Instant::now())
-}
-
-/// get connection begin timestamp
-pub fn get_connection_begin_ts() -> Instant {
-    CONNECTION_BEGIN_TS.with(|item| item.borrow().clone())
-}
-
-/// is use ip directly
-pub fn get_use_ip_directly() -> Option<bool> {
-    USE_IP_DIRECTLY.with(|item| item.borrow().clone())
-}
-
-/// set connection dns resolve finished timestamp
-fn set_dns_finished_ts() {
-    DNS_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
-}
-
-/// get connection dns resolve finished timestamp
-pub fn get_dns_finished_ts() -> Option<Instant> {
-    DNS_FINISHED_TS.with(|item| item.borrow().clone())
-}
-
-/// set connection tcp connect finished timestamp
-fn set_tcp_finished_ts() {
-    TCP_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
-}
-
-/// get connection tcp connect finished timestamp
-pub fn get_tcp_finished_ts() -> Option<Instant> {
-    TCP_FINISHED_TS.with(|item| item.borrow().clone())
-}
-
-/// set connection tls handshake finished timestamp
-pub fn set_tls_finished_ts() {
-    TLS_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()))
-}
-
-/// get connection tls handshake finished timestamp
-pub fn get_tls_finished_ts() -> Option<Instant> {
-    TLS_FINISHED_TS.with(|item| item.borrow().clone())
-}
-
-/// set connection alpn protocol
-pub fn set_alpn_protocol(alpn_info: Option<&str>) {
-    ALPN_PROTOCOL.with(|item| *item.borrow_mut() = alpn_info.map(|item| item.to_string()));
-}
-
-/// get connection alpn protocol
-pub fn get_alpn_protocol() -> Option<String> {
-    ALPN_PROTOCOL.with(|item| item.borrow().clone())
-}
-
-/// set connection tls version
-pub fn set_tls_protocol_version(tls_version: Option<String>) {
-    TLS_PROTOCOL_VERSION.with(|item| *item.borrow_mut() = tls_version);
-}
-
-/// get connection tls version
-pub fn get_tls_protocol_version() -> Option<String> {
-    TLS_PROTOCOL_VERSION.with(|item| item.borrow().clone())
-}
-
-/// set connection tls cipher suite
-pub fn set_tls_cipher_suite(cipher_suite: Option<String>) {
-    TLS_CIPHER_SUITE.with(|item| *item.borrow_mut() = cipher_suite);
-}
-
-/// get connection tls cipher suite
-pub fn get_tls_cipher_suite() -> Option<String> {
-    TLS_CIPHER_SUITE.with(|item| item.borrow().clone())
-}
-
-use std::cell::RefCell;
-task_local!(static PAIR_ADDRS: RefCell<Option<(SocketAddr, SocketAddr)>> = RefCell::new(None));
-task_local!(static USE_IP_DIRECTLY: RefCell<Option<bool>> = RefCell::new(None));
-task_local!(static CONNECTION_BEGIN_TS: RefCell<Instant> = RefCell::new(Instant::now()));
-task_local!(static DNS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static TCP_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static TLS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static ALPN_PROTOCOL: RefCell<Option<String>> = RefCell::new(None));
-task_local!(static TLS_PROTOCOL_VERSION: RefCell<Option<String>> = RefCell::new(None));
-task_local!(static TLS_CIPHER_SUITE: RefCell<Option<String>> = RefCell::new(None));
-
 impl<R: Resolve> Future for HttpConnecting<R> {
     type Item = (TcpStream, Connected);
     type Error = io::Error;
@@ -445,13 +373,15 @@ impl<R: Resolve> Future for HttpConnecting<R> {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             let state;
+            let mut dns_info: Option<DnsInfo> = None;
+            let req_id = self.req_id.clone();
             match self.state {
                 State::Lazy(ref resolver, ref mut host, local_addr) => {
                     // If the host is already an IP addr (v4 or v6),
                     // skip resolving the dns and start connecting right away.
                     if let Some(addrs) = dns::IpAddrs::try_parse(host, self.port) {
-                        USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
-                        set_dns_finished_ts();
+                        dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Ip));
+
                         state = State::Connecting(ConnectingTcp::new(
                             local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
                     } else {
@@ -473,8 +403,8 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                     match try_get_addr(&self.host, self.addr_used_when_exist.as_ref()) {
                         Some(addrs) => {
-                            USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
-                            set_dns_finished_ts();
+                            dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Specified));
+
                             state = State::Connecting(ConnectingTcp::new(
                                 local_addr,
                                 addrs,
@@ -494,7 +424,9 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                                     debug!("resolve dns success: host= {:?} addrs= {:?}", self.host, addrs);
                                     set_domain2dns_addrs(self.host.to_string(), addrs.clone());
-                                    set_dns_finished_ts();
+
+                                    dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Resolved));
+
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
                                 }
@@ -507,8 +439,8 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                         return Err(io::Error::new(io::ErrorKind::Other, "cached adrs is empty"));
                                     }
 
-                                    USE_IP_DIRECTLY.with(|item| *item.borrow_mut() = Some(true));
-                                    set_dns_finished_ts();
+                                    dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Cached));
+
                                     debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr,
@@ -530,24 +462,49 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
                     sock.set_nodelay(self.nodelay)?;
 
-                    TCP_FINISHED_TS.with(|item| *item.borrow_mut() = Some(Instant::now()));
-                    set_tcp_finished_ts();
+                    let (local_addr, peer_addr) = (sock.local_addr()?, sock.peer_addr()?);
 
-                    let peer_addr = sock.peer_addr()?;
-                    let local_addr = sock.local_addr()?;
-                    PAIR_ADDRS.with(|item| *item.borrow_mut() = Some((peer_addr, local_addr)));
+                    let tcp_info = TcpInfo {
+                        pair_addrs: (local_addr, peer_addr),
+                        #[cfg(unix)]
+                        raw_fd: {
+                            use std::os::unix::io::AsRawFd;
+                            sock.as_raw_fd()
+                        },
+                        finished_ts: Instant::now(),
+                    };
+
+                    let dns_info = match self.dns_info.take() {
+                        Some(info) => info,
+                        None => {
+                            warn!("has no dns info");
+                            DnsInfo {
+                                addr_resolve_type: AddrResolveType::Resolved,
+                                finished_ts: Instant::now()
+                            }
+                        }
+                    };
+                    let connection_info = ConnectionInfo {
+                        req_id: req_id.clone(),
+                        connection_begin_ts: self.connection_begin_ts,
+                        dns_info,
+                        tcp_info,
+                        tls_info: None,
+                    };
+                    set_connection_info(req_id, connection_info.clone());
 
                     let extra = HttpInfo {
                         remote_addr: peer_addr,
                     };
-                    let connected = Connected::new()
-                        .extra(extra);
 
+                    let connected = Connected::new(connection_info)
+                        .extra(extra);
                     return Ok(Async::Ready((sock, connected)));
                 },
                 State::Error(ref mut e) => return Err(e.take().expect("polled more than once")),
             }
             self.state = state;
+            self.dns_info = dns_info;
         }
     }
 }

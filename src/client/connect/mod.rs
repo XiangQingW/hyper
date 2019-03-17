@@ -16,7 +16,6 @@ use tokio_io::{AsyncRead, AsyncWrite};
 #[cfg(feature = "runtime")] pub mod dns;
 #[cfg(feature = "runtime")] mod http;
 #[cfg(feature = "runtime")] pub use self::http::{HttpConnector, HttpInfo};
-pub use self::http::{get_connection_pair_addrs, get_connection_begin_ts, get_use_ip_directly, get_dns_finished_ts, get_tcp_finished_ts, set_tls_finished_ts, get_tls_finished_ts, set_alpn_protocol, get_alpn_protocol, set_tls_protocol_version, get_tls_protocol_version, set_tls_cipher_suite, get_tls_cipher_suite};
 
 /// Connect to a destination, returning an IO transport.
 ///
@@ -40,12 +39,14 @@ pub struct Destination {
     pub(super) uri: Uri,
 }
 
+use crate::info::ConnectionInfo;
 /// Extra information about the connected transport.
 ///
 /// This can be used to inform recipients about things like if ALPN
 /// was used, or if connected to an HTTP proxy.
 #[derive(Debug)]
 pub struct Connected {
+    pub(super) connection_info: ConnectionInfo,
     pub(super) alpn: Alpn,
     pub(super) is_proxied: bool,
     pub(super) extra: Option<Extra>,
@@ -244,12 +245,22 @@ impl Destination {
 
 impl Connected {
     /// Create new `Connected` type with empty metadata.
-    pub fn new() -> Connected {
+    pub fn new(connection_info: ConnectionInfo) -> Connected {
         Connected {
+            connection_info,
             alpn: Alpn::None,
             is_proxied: false,
             extra: None,
         }
+    }
+
+    pub fn tls_info(mut self, tls_info: crate::info::TlsInfo) -> Connected {
+        self.connection_info.tls_info = Some(tls_info);
+        self
+    }
+
+    pub fn req_id(&self) -> &str {
+        &self.connection_info.req_id
     }
 
     /// Set whether the connected transport is to an HTTP proxy.
@@ -285,6 +296,7 @@ impl Connected {
     // keep that contract...
     pub(super) fn clone(&self) -> Connected {
         Connected {
+            connection_info: self.connection_info.clone(),
             alpn: self.alpn.clone(),
             is_proxied: self.is_proxied,
             extra: self.extra.clone(),

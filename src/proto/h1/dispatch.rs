@@ -35,11 +35,11 @@ pub struct Server<S: Service> {
 }
 
 pub struct Client<B> {
-    callback: Option<::client::dispatch::Callback<Request<B>, Response<Body>>>,
+    callback: Option<::client::dispatch::Callback<Request<B>, crate::NewResponse>>,
     rx: ClientRx<B>,
 }
 
-type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, Response<Body>>;
+type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, crate::NewResponse>;
 
 impl<D, Bs, I, T> Dispatcher<D, Bs, I, T>
 where
@@ -133,6 +133,10 @@ where
             if self.is_closing {
                 return Ok(Async::Ready(()));
             } else if self.conn.can_read_head() {
+                if crate::info::get_res_begin_ts().is_none() {
+                    crate::info::set_res_begin_ts();
+                }
+
                 try_ready!(self.poll_read_head());
             } else if let Some(mut body) = self.body_tx.take() {
                 if self.conn.can_read_body() {
@@ -253,6 +257,7 @@ where
                         self.body_rx = Some(body);
                         btype
                     };
+
                     self.conn.write_head(head, body_type);
                 } else {
                     self.close();
@@ -479,7 +484,21 @@ where
                     *res.status_mut() = msg.subject;
                     *res.headers_mut() = msg.headers;
                     *res.version_mut() = msg.version;
-                    let _ = cb.send(Ok(res));
+
+                    let transport_info = match (crate::info::get_req_finished_ts(),
+                                                crate::info::get_res_begin_ts(),
+                                                crate::info::get_res_header_finished_ts(),
+                                                crate::info::get_res_header_length()) {
+                        (Some(req_finished_ts), Some(res_begin_ts), Some(res_header_finished_ts), Some(res_header_length)) => Some(crate::info::TransportInfo {
+                            req_finished_ts,
+                            res_begin_ts,
+                            res_header_finished_ts,
+                            res_header_length
+                        }),
+                        _ => None,
+                    };
+
+                    let _ = cb.send(Ok((res, transport_info)));
                     Ok(())
                 } else {
                     Err(::Error::new_mismatched_response())

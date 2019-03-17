@@ -22,7 +22,7 @@ use common::Exec;
 use upgrade::Upgraded;
 use proto;
 use super::dispatch;
-use {Body, Request, Response};
+use Request;
 
 type Http1Dispatcher<T, B, R> = proto::dispatch::Dispatcher<
     proto::dispatch::Client<B>,
@@ -48,7 +48,7 @@ where
 
 /// The sender side of an established connection.
 pub struct SendRequest<B> {
-    dispatch: dispatch::Sender<Request<B>, Response<Body>>,
+    dispatch: dispatch::Sender<Request<B>, crate::NewResponse>,
 }
 
 
@@ -95,7 +95,7 @@ pub struct Handshake<T, B> {
 pub struct ResponseFuture {
     // for now, a Box is used to hide away the internal `B`
     // that can be returned if canceled
-    inner: Box<Future<Item=Response<Body>, Error=::Error> + Send>,
+    inner: Box<Future<Item=crate::NewResponse, Error=::Error> + Send>,
 }
 
 /// Deconstructed parts of a `Connection`.
@@ -132,7 +132,7 @@ pub(super) struct WhenReady<B> {
 // private for now, probably not a great idea of a type...
 #[must_use = "futures do nothing unless polled"]
 pub(super) struct Http2SendRequest<B> {
-    dispatch: dispatch::UnboundedSender<Request<B>, Response<Body>>,
+    dispatch: dispatch::UnboundedSender<Request<B>, crate::NewResponse>,
 }
 
 // ===== impl SendRequest
@@ -242,7 +242,7 @@ where
         }
     }
 
-    pub(crate) fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = Response<Body>, Error = (::Error, Option<Request<B>>)>
+    pub(crate) fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = crate::NewResponse, Error = (::Error, Option<Request<B>>)>
     where
         B: Send,
     {
@@ -302,7 +302,7 @@ impl<B> Http2SendRequest<B>
 where
     B: Payload + 'static,
 {
-    pub(super) fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item=Response<Body>, Error=(::Error, Option<Request<B>>)>
+    pub(super) fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item=crate::NewResponse, Error=(::Error, Option<Request<B>>)>
     where
         B: Send,
     {
@@ -539,7 +539,7 @@ impl<T, B> fmt::Debug for Handshake<T, B> {
 // ===== impl ResponseFuture
 
 impl Future for ResponseFuture {
-    type Item = Response<Body>;
+    type Item = crate::NewResponse;
     type Error = ::Error;
 
     #[inline]
@@ -602,4 +602,3 @@ impl AssertSendSync for Builder {}
 
 #[doc(hidden)]
 impl AssertSend for ResponseFuture {}
-

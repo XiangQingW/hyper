@@ -211,6 +211,7 @@ where
             loop {
                 let n = try_ready!(self.io.write_buf(&mut self.write_buf.auto()));
                 debug!("flushed {} bytes", n);
+
                 if self.write_buf.remaining() == 0 {
                     break;
                 } else if n == 0 {
@@ -231,6 +232,7 @@ where
         loop {
             let n = try_nb!(self.io.write(self.write_buf.headers.bytes()));
             debug!("flushed {} bytes", n);
+
             self.write_buf.headers.advance(n);
             if self.write_buf.headers.remaining() == 0 {
                 self.write_buf.headers.reset();
@@ -249,7 +251,7 @@ pub trait MemRead {
     fn read_mem(&mut self, len: usize) -> Poll<Bytes, io::Error>;
 }
 
-impl<T, B> MemRead for Buffered<T, B> 
+impl<T, B> MemRead for Buffered<T, B>
 where
     T: AsyncRead + AsyncWrite,
     B: Buf,

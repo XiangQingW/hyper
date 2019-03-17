@@ -34,7 +34,7 @@ type ResponseFuture = Box<Future<Item=Response<Body>, Error=io::Error> + Send>;
 
 fn response_examples(req: Request<Body>) -> ResponseFuture {
     match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") | (&Method::GET, "/index.html") | (&Method::GET, "/big_file.html") => {
+        (&Method::GET, "/") | (&Method::POST, "/") | (&Method::GET, "/index.html") | (&Method::GET, "/big_file.html") => {
             simple_file_send(INDEX)
         },
         (&Method::GET, "/no_file.html") => {

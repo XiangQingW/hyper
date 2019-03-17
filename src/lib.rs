@@ -1,5 +1,5 @@
 #![doc(html_root_url = "https://docs.rs/hyper/0.12.19")]
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 #![cfg_attr(test, deny(warnings))]
 #![cfg_attr(all(test, feature = "nightly"), feature(test))]
@@ -69,3 +69,7 @@ pub mod server;
 pub mod service;
 #[cfg(feature = "runtime")] pub mod rt;
 pub mod upgrade;
+
+// custom set
+pub mod info;
+type NewResponse = (Response<Body>, Option<info::TransportInfo>);

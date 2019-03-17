@@ -584,6 +584,8 @@ impl Http1Transaction for Client {
                 match res.parse(bytes)? {
                     httparse::Status::Complete(len) => {
                         trace!("Response.parse Complete({})", len);
+                        crate::info::set_res_header_length(len as u64);
+
                         let status = StatusCode::from_u16(res.code.unwrap())?;
                         let version = if res.version.unwrap() == 1 {
                             Version::HTTP_11
@@ -658,10 +660,10 @@ impl Http1Transaction for Client {
         let init_cap = 30 + msg.head.headers.len() * AVERAGE_HEADER_SIZE;
         dst.reserve(init_cap);
 
-
         extend(dst, msg.head.subject.0.as_str().as_bytes());
         extend(dst, b" ");
         //TODO: add API to http::Uri to encode without std::fmt
+
         let _ = write!(FastWrite(dst), "{} ", msg.head.subject.1);
 
         match msg.head.version {
@@ -1589,4 +1591,3 @@ mod tests {
         })
     }
 }
-

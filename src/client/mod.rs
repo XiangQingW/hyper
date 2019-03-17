@@ -80,7 +80,7 @@
 use std::fmt;
 use std::mem;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{Async, Future, Poll};
 use futures::future::{self, Either, Executor};
@@ -162,13 +162,6 @@ impl Client<(), Body> {
     pub fn builder() -> Builder {
         Builder::default()
     }
-}
-
-use std::cell::RefCell;
-task_local!(static REUSE_IDLE_CONNECTION: RefCell<bool> = RefCell::new(false));
-/// get is reuse idle connection
-pub fn get_reuse_idle_connection() -> bool {
-    REUSE_IDLE_CONNECTION.with(|item| item.borrow().clone())
 }
 
 impl<C, B> Client<C, B>
@@ -274,11 +267,39 @@ where C: Connect + Sync + 'static,
     }
 
     fn send_request(&self, mut req: Request<B>, pool_key: PoolKey) -> impl Future<Item=Response<Body>, Error=ClientError<B>> {
+        let send_req_ts = Instant::now();
         let conn = self.connection_for(req.uri().clone(), pool_key);
+
+        let req_id = crate::info::get_uri_req_id(req.uri());
+        let req_id_1 = req_id.clone();
+        let req_id_2 = req_id.clone();
+        let conn = future::ok::<(), ()>(())
+            .then(move |_| {
+                crate::info::set_send_req_ts(req_id_1, send_req_ts);
+                conn
+            });
 
         let set_host = self.config.set_host;
         let executor = self.conn_builder.exec.clone();
         conn.and_then(move |mut pooled| {
+            // custom add
+            use crate::info::ConnectInfo;
+            let connect_finished_ts = Instant::now();
+            let reuse_idle_connection = pooled.is_reused();
+            let alpn = format!("{:?}", pooled.conn_info.alpn.clone());
+            let is_proxied = pooled.conn_info.is_proxied;
+            let connection_info = pooled.conn_info.connection_info.clone();
+
+            let connect_info = ConnectInfo {
+                consulted_alpn: alpn,
+                is_proxied,
+                reuse_idle_connection,
+                send_req_ts,
+                connect_finished_ts,
+                connection_info,
+            };
+            crate::info::set_connect_info(req_id_2, connect_info);
+
             if pooled.is_http1() {
                 if set_host {
                     let uri = req.uri().clone();
@@ -315,7 +336,11 @@ where C: Connect + Sync + 'static,
 
             // If the Connector included 'extra' info, add to Response...
             let extra_info = pooled.conn_info.extra.clone();
-            let fut = fut.map(move |mut res| {
+            let fut = fut.map(move |(mut res, t_info)| {
+                if let Some(t_info) = t_info {
+                    crate::info::set_transport_info(req_id, t_info);
+                }
+
                 if let Some(extra) = extra_info {
                     extra.set(&mut res);
                 }
@@ -418,7 +443,6 @@ where C: Connect + Sync + 'static,
                     //
                     // If it *wasn't* ready yet, then the connect future will
                     // have been started...
-                    REUSE_IDLE_CONNECTION.with(|item| *item.borrow_mut() = true);
                     if connecting.started() {
                         let bg = connecting
                             .map(|_pooled| {
@@ -641,7 +665,7 @@ impl<B> PoolClient<B> {
 }
 
 impl<B: Payload + 'static> PoolClient<B> {
-    fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = Response<Body>, Error = (::Error, Option<Request<B>>)>
+    fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = crate::NewResponse, Error = (::Error, Option<Request<B>>)>
     where
         B: Send,
     {

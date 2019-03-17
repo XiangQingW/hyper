@@ -35,11 +35,62 @@ pub struct Server<S: Service> {
 }
 
 pub struct Client<B> {
-    callback: Option<::client::dispatch::Callback<Request<B>, Response<Body>>>,
+    callback: Option<::client::dispatch::Callback<Request<B>, crate::NewResponse>>,
     rx: ClientRx<B>,
 }
 
-type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, Response<Body>>;
+use std::cell::RefCell;
+use std::time::Instant;
+task_local!(static REQ_HEADER_BODY_MIXED: RefCell<bool> = RefCell::new(false));
+pub(crate) fn set_req_header_finished_ts() {
+    REQ_HEADER_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+}
+pub fn get_req_header_finished_ts() -> Option<Instant> {
+    REQ_HEADER_FINISHED_TS.with(|s| s.borrow().clone())
+}
+pub(crate) fn set_req_body_finished_ts() {
+    REQ_HEADER_BODY_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+}
+pub fn get_req_body_finished_ts() -> Option<Instant> {
+    REQ_HEADER_BODY_TS.with(|s| s.borrow().clone())
+}
+pub(crate) fn set_res_header_finished_ts() {
+    RES_HEADER_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+}
+pub fn get_res_header_finished_ts() -> Option<Instant> {
+    RES_HEADER_FINISHED_TS.with(|s| s.borrow().clone())
+}
+pub(crate) fn set_res_body_finished_ts() {
+    RES_HEADER_BODY_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+}
+pub fn get_res_body_finished_ts() -> Option<Instant> {
+    RES_HEADER_BODY_TS.with(|s| s.borrow().clone())
+}
+
+task_local!(static REQ_HEADER_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static REQ_HEADER_LENGTH: RefCell<Option<u64>> = RefCell::new(None));
+task_local!(static REQ_BODY_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static REQ_BODY_LENGTH: RefCell<Option<u64>> = RefCell::new(None));
+task_local!(static RES_HEADER_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static RES_HEADER_LENGTH: RefCell<Option<u64>> = RefCell::new(None));
+task_local!(static RES_BODY_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static RES_BODY_LENGTH: RefCell<Option<u64>> = RefCell::new(None));
+
+#[derive(Clone, Debug)]
+pub enum ReqResState {
+    ReqHeader,
+    ReqBody,
+    ReqHeaderBody,
+    ResHeader,
+    ResBody
+}
+task_local!(static REQ_RES_STATE: RefCell<Option<ReqResState>> = RefCell::new(None));
+
+pub fn get_req_res_state() -> Option<ReqResState> {
+    REQ_RES_STATE.with(|s| s.borrow().clone())
+}
+
+type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, crate::NewResponse>;
 
 impl<D, Bs, I, T> Dispatcher<D, Bs, I, T>
 where
@@ -94,6 +145,7 @@ where
     }
 
     fn poll_inner(&mut self, should_shutdown: bool) -> Poll<Dispatched, ::Error> {
+        trace!("poll inner");
         T::update_date();
 
         loop {
@@ -133,8 +185,12 @@ where
             if self.is_closing {
                 return Ok(Async::Ready(()));
             } else if self.conn.can_read_head() {
+                trace!("poll read head");
+                REQ_RES_STATE.with(|s| *s.borrow_mut() = Some(ReqResState::ResHeader));
                 try_ready!(self.poll_read_head());
             } else if let Some(mut body) = self.body_tx.take() {
+                REQ_RES_STATE.with(|s| *s.borrow_mut() = Some(ReqResState::ResBody));
+                trace!("poll read body");
                 if self.conn.can_read_body() {
                     match body.poll_ready() {
                         Ok(Async::Ready(())) => (),
@@ -240,6 +296,9 @@ where
                     // If so, we can skip a bit of bookkeeping that streaming
                     // bodies need to do.
                     if let Some(full) = body.__hyper_full_data(FullDataArg(())).0 {
+                        REQ_HEADER_BODY_MIXED.with(|s| *s.borrow_mut() = true);
+                        REQ_RES_STATE.with(|s| *s.borrow_mut() = Some(ReqResState::ReqHeaderBody));
+                        trace!("poll write head and body both");
                         self.conn.write_full_msg(head, full);
                         return Ok(Async::Ready(()));
                     }
@@ -253,14 +312,20 @@ where
                         self.body_rx = Some(body);
                         btype
                     };
+
+                    REQ_RES_STATE.with(|s| *s.borrow_mut() = Some(ReqResState::ReqHeader));
+                    trace!("poll write head only");
                     self.conn.write_head(head, body_type);
                 } else {
                     self.close();
                     return Ok(Async::Ready(()));
                 }
             } else if !self.conn.can_buffer_body() {
+                trace!("poll write body only");
                 try_ready!(self.poll_flush());
             } else if let Some(mut body) = self.body_rx.take() {
+                REQ_RES_STATE.with(|s| *s.borrow_mut() = Some(ReqResState::ReqBody));
+                trace!("poll write body only");
                 if !self.conn.can_write_body() {
                     trace!(
                         "no more write body allowed, user body is_end_stream = {}",
@@ -479,7 +544,9 @@ where
                     *res.status_mut() = msg.subject;
                     *res.headers_mut() = msg.headers;
                     *res.version_mut() = msg.version;
-                    let _ = cb.send(Ok(res));
+
+                    let transport_info = crate::TransportInfo::new(10);
+                    let _ = cb.send(Ok((res, transport_info)));
                     Ok(())
                 } else {
                     Err(::Error::new_mismatched_response())

@@ -175,6 +175,10 @@ where
             match ok {
                 Async::Ready(n) => {
                     debug!("read {} bytes", n);
+                    if super::dispatch::get_res_header_finished_ts().is_none() {
+
+                    }
+
                     self.read_buf_strategy.record(n);
                     Async::Ready(n)
                 },
@@ -249,7 +253,7 @@ pub trait MemRead {
     fn read_mem(&mut self, len: usize) -> Poll<Bytes, io::Error>;
 }
 
-impl<T, B> MemRead for Buffered<T, B> 
+impl<T, B> MemRead for Buffered<T, B>
 where
     T: AsyncRead + AsyncWrite,
     B: Buf,

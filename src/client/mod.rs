@@ -315,7 +315,8 @@ where C: Connect + Sync + 'static,
 
             // If the Connector included 'extra' info, add to Response...
             let extra_info = pooled.conn_info.extra.clone();
-            let fut = fut.map(move |mut res| {
+            let fut = fut.map(move |(mut res, t_info)| {
+                warn!("transport info: {:?}", t_info);
                 if let Some(extra) = extra_info {
                     extra.set(&mut res);
                 }
@@ -641,7 +642,7 @@ impl<B> PoolClient<B> {
 }
 
 impl<B: Payload + 'static> PoolClient<B> {
-    fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = Response<Body>, Error = (::Error, Option<Request<B>>)>
+    fn send_request_retryable(&mut self, req: Request<B>) -> impl Future<Item = crate::NewResponse, Error = (::Error, Option<Request<B>>)>
     where
         B: Send,
     {

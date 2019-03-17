@@ -13,7 +13,7 @@ use ::proto::Dispatched;
 use super::{PipeToSendStream, SendBuf};
 use ::{Body, Request, Response};
 
-type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, Response<Body>>;
+type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, crate::NewResponse>;
 /// An mpsc channel is used to help notify the `Connection` task when *all*
 /// other handles to it have been dropped, so that it can shutdown.
 type ConnDropRef = mpsc::Sender<Never>;
@@ -146,8 +146,9 @@ where
                                         Ok(res) => {
                                             let content_length = content_length_parse_all(res.headers());
                                             let res = res.map(|stream|
-                                                ::Body::h2(stream, content_length));
-                                            let _ = cb.send(Ok(res));
+                                                              ::Body::h2(stream, content_length));
+                                            let t_info = crate::TransportInfo::new(10);
+                                            let _ = cb.send(Ok((res, t_info)));
                                         },
                                         Err(err) => {
                                             debug!("client response error: {}", err);

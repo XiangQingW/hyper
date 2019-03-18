@@ -58,20 +58,16 @@ pub use server::Server;
 
 use std::time::Instant;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TransportInfo {
-    req_header_length: u64,
-    // req_header_finished_ts: Instant,
-    // req_body_length: u64,
-    // req_body_finished_ts: Instant,
-    // res_header_length: u64,
-    // res_header_finished_ts: Instant,
-}
-
-impl TransportInfo {
-    pub fn new(req_header_length: u64) -> Self {
-        Self { req_header_length }
-    }
+    pub req_header_body_mixed: bool,
+    pub req_header_finished_ts: Option<Instant>,
+    pub req_header_length: Option<usize>,
+    pub req_body_finished_ts: Option<Instant>,
+    pub req_body_length: Option<usize>,
+    pub res_header_finished_ts: Option<Instant>,
+    pub res_header_length: Option<usize>,
+    pub res_body_length: Option<usize>,
 }
 
 type NewResponse = (Response<Body>, TransportInfo);

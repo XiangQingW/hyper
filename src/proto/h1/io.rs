@@ -214,7 +214,10 @@ where
             }
             loop {
                 let n = try_ready!(self.io.write_buf(&mut self.write_buf.auto()));
-                debug!("flushed {} bytes", n);
+                super::dispatch::set_req_header_length(n);
+                super::dispatch::set_req_body_length(n);
+                super::dispatch::set_req_header_finished_ts();
+                super::dispatch::set_req_body_finished_ts();
                 if self.write_buf.remaining() == 0 {
                     break;
                 } else if n == 0 {
@@ -235,6 +238,10 @@ where
         loop {
             let n = try_nb!(self.io.write(self.write_buf.headers.bytes()));
             debug!("flushed {} bytes", n);
+            super::dispatch::set_req_header_length(n);
+            super::dispatch::set_req_body_length(n);
+            super::dispatch::set_req_header_finished_ts();
+            super::dispatch::set_req_body_finished_ts();
             self.write_buf.headers.advance(n);
             if self.write_buf.headers.remaining() == 0 {
                 self.write_buf.headers.reset();

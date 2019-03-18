@@ -146,6 +146,10 @@ where I: AsyncRead + AsyncWrite,
         // Note: don't deconstruct `msg` into local variables, it appears
         // the optimizer doesn't remove the extra copies.
         super::dispatch::set_res_header_finished_ts();
+        if let Some(len) = msg.decode.clone().into_opt() {
+            super::dispatch::set_res_body_length(len as usize);
+        }
+
         debug!("incoming body is {}", msg.decode);
 
         self.state.busy();
@@ -196,7 +200,6 @@ where I: AsyncRead + AsyncWrite,
                 match decoder.decode(&mut self.io) {
                     Ok(Async::Ready(slice)) => {
                         let (reading, chunk) = if decoder.is_eof() {
-                            super::dispatch::set_res_body_finished_ts();
                             debug!("incoming body completed");
                             (Reading::KeepAlive, if !slice.is_empty() {
                                 Some(Chunk::from(slice))
@@ -608,7 +611,6 @@ where I: AsyncRead + AsyncWrite,
     pub fn flush(&mut self) -> Poll<(), io::Error> {
         try_ready!(self.io.flush());
         self.try_keep_alive();
-        debug!("state: {:?}", super::dispatch::get_req_res_state());
         trace!("flushed({}): {:?}", T::LOG, self.state);
         Ok(Async::Ready(()))
     }

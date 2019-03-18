@@ -584,6 +584,8 @@ impl Http1Transaction for Client {
                 match res.parse(bytes)? {
                     httparse::Status::Complete(len) => {
                         trace!("Response.parse Complete({})", len);
+                        super::dispatch::set_res_header_length(len);
+
                         let status = StatusCode::from_u16(res.code.unwrap())?;
                         let version = if res.version.unwrap() == 1 {
                             Version::HTTP_11
@@ -1589,4 +1591,3 @@ mod tests {
         })
     }
 }
-

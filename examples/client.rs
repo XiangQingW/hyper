@@ -66,6 +66,8 @@ fn fetch_url(url: hyper::Uri) -> impl Future<Item=(), Error=()> {
         })
         // If all good, just tell the user...
         .map(|body| {
+            let t_info = hyper::client::get_transport_info();
+            debug!("transport info: {:?}", t_info);
             debug!("Done. Body: {:?}", body);
         })
         // If there was an error, let the user know...

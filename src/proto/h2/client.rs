@@ -147,7 +147,8 @@ where
                                             let content_length = content_length_parse_all(res.headers());
                                             let res = res.map(|stream|
                                                               ::Body::h2(stream, content_length));
-                                            let t_info = crate::TransportInfo::new(10);
+
+                                            let t_info = crate::TransportInfo::default();
                                             let _ = cb.send(Ok((res, t_info)));
                                         },
                                         Err(err) => {

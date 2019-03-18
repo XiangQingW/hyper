@@ -166,9 +166,16 @@ impl Client<(), Body> {
 
 use std::cell::RefCell;
 task_local!(static REUSE_IDLE_CONNECTION: RefCell<bool> = RefCell::new(false));
+task_local!(static TRANSPORT_INFO: RefCell<Option<crate::TransportInfo>> = RefCell::new(None));
 /// get is reuse idle connection
 pub fn get_reuse_idle_connection() -> bool {
     REUSE_IDLE_CONNECTION.with(|item| item.borrow().clone())
+}
+pub fn get_transport_info() -> Option<crate::TransportInfo> {
+    TRANSPORT_INFO.with(|s| s.borrow().clone())
+}
+fn set_transport_info(t_info: crate::TransportInfo) {
+    TRANSPORT_INFO.with(|s| *s.borrow_mut() = Some(t_info));
 }
 
 impl<C, B> Client<C, B>
@@ -316,7 +323,7 @@ where C: Connect + Sync + 'static,
             // If the Connector included 'extra' info, add to Response...
             let extra_info = pooled.conn_info.extra.clone();
             let fut = fut.map(move |(mut res, t_info)| {
-                warn!("transport info: {:?}", t_info);
+                set_transport_info(t_info);
                 if let Some(extra) = extra_info {
                     extra.set(&mut res);
                 }

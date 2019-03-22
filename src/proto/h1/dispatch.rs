@@ -41,63 +41,36 @@ pub struct Client<B> {
 
 use std::cell::RefCell;
 use std::time::Instant;
-task_local!(static REQ_HEADER_BODY_MIXED: RefCell<bool> = RefCell::new(false));
-pub(crate) fn set_req_header_body_mixed() {
-    REQ_HEADER_BODY_MIXED.with(|s| *s.borrow_mut() = true);
+
+pub(crate) fn set_req_finished_ts() {
+    REQ_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
 }
-pub fn get_req_header_body_mixed() -> bool {
-    REQ_HEADER_BODY_MIXED.with(|s| s.borrow().clone())
+fn get_req_finished_ts() -> Option<Instant> {
+    REQ_FINISHED_TS.with(|s| s.borrow().clone())
 }
-pub(crate) fn set_req_header_finished_ts() {
-    REQ_HEADER_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+pub(crate) fn set_res_begin_ts() {
+    RES_BEGIN_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
 }
-pub fn get_req_header_finished_ts() -> Option<Instant> {
-    REQ_HEADER_FINISHED_TS.with(|s| s.borrow().clone())
-}
-pub(crate) fn set_req_header_length(len: usize) {
-    REQ_HEADER_LENGTH.with(|s| *s.borrow_mut() = Some(len));
-}
-pub fn get_req_header_length() -> Option<usize> {
-    REQ_HEADER_LENGTH.with(|s| s.borrow().clone())
-}
-pub(crate) fn set_req_body_finished_ts() {
-    REQ_BODY_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
-}
-pub fn get_req_body_finished_ts() -> Option<Instant> {
-    REQ_BODY_FINISHED_TS.with(|s| s.borrow().clone())
-}
-pub(crate) fn set_req_body_length(len: usize) {
-    REQ_BODY_LENGTH.with(|s| *s.borrow_mut() = Some(len));
-}
-pub fn get_req_body_length() -> Option<usize> {
-    REQ_BODY_LENGTH.with(|s| s.borrow().clone())
+fn get_res_begin_ts() -> Option<Instant> {
+    RES_BEGIN_TS.with(|s| s.borrow().clone())
 }
 pub(crate) fn set_res_header_finished_ts() {
     RES_HEADER_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
 }
-pub fn get_res_header_finished_ts() -> Option<Instant> {
+fn get_res_header_finished_ts() -> Option<Instant> {
     RES_HEADER_FINISHED_TS.with(|s| s.borrow().clone())
 }
-pub(crate) fn set_res_header_length(len: usize) {
+pub(crate) fn set_res_header_length(len: u64) {
     RES_HEADER_LENGTH.with(|s| *s.borrow_mut() = Some(len));
 }
-pub fn get_res_header_length() -> Option<usize> {
+fn get_res_header_length() -> Option<u64> {
     RES_HEADER_LENGTH.with(|s| s.borrow().clone())
 }
-pub(crate) fn set_res_body_length(len: usize) {
-    RES_BODY_LENGTH.with(|s| *s.borrow_mut() = Some(len));
-}
-pub fn get_res_body_length() -> Option<usize> {
-    RES_BODY_LENGTH.with(|s| s.borrow().clone())
-}
 
-task_local!(static REQ_HEADER_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static REQ_HEADER_LENGTH: RefCell<Option<usize>> = RefCell::new(None));
-task_local!(static REQ_BODY_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static REQ_BODY_LENGTH: RefCell<Option<usize>> = RefCell::new(None));
+task_local!(static REQ_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static RES_BEGIN_TS: RefCell<Option<Instant>> = RefCell::new(None));
 task_local!(static RES_HEADER_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
-task_local!(static RES_HEADER_LENGTH: RefCell<Option<usize>> = RefCell::new(None));
-task_local!(static RES_BODY_LENGTH: RefCell<Option<usize>> = RefCell::new(None));
+task_local!(static RES_HEADER_LENGTH: RefCell<Option<u64>> = RefCell::new(None));
 
 type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, crate::NewResponse>;
 
@@ -195,6 +168,10 @@ where
                 return Ok(Async::Ready(()));
             } else if self.conn.can_read_head() {
                 trace!("poll read head");
+
+                if get_res_begin_ts().is_none() {
+                    set_res_begin_ts();
+                }
                 try_ready!(self.poll_read_head());
             } else if let Some(mut body) = self.body_tx.take() {
                 trace!("poll read body");
@@ -303,9 +280,7 @@ where
                     // If so, we can skip a bit of bookkeeping that streaming
                     // bodies need to do.
                     if let Some(full) = body.__hyper_full_data(FullDataArg(())).0 {
-                        set_req_header_body_mixed();
-
-                        trace!("poll write head and body both");
+                        debug!("poll write head and body both");
                         self.conn.write_full_msg(head, full);
                         return Ok(Async::Ready(()));
                     }
@@ -551,14 +526,10 @@ where
                     *res.version_mut() = msg.version;
 
                     let transport_info = crate::TransportInfo {
-                        req_header_body_mixed: get_req_header_body_mixed(),
-                        req_header_finished_ts: get_req_header_finished_ts(),
-                        req_header_length: get_req_header_length(),
-                        req_body_finished_ts: get_req_body_finished_ts(),
-                        req_body_length: get_req_body_length(),
+                        req_finished_ts: get_req_finished_ts(),
+                        res_begin_ts: get_res_begin_ts(),
                         res_header_finished_ts: get_res_header_finished_ts(),
                         res_header_length: get_res_header_length(),
-                        res_body_length: get_res_body_length()
                     };
                     let _ = cb.send(Ok((res, transport_info)));
                     Ok(())

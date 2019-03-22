@@ -48,12 +48,14 @@ fn fetch_url(url: hyper::Uri) -> impl Future<Item=(), Error=()> {
     *req.uri_mut() = url;
     req.headers_mut().insert(hyper::header::CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
 
+    debug!("send request thread: {:?}", std::thread::current());
     client
         .request(req)
         // And then, if we get a response back...
         .and_then(|res| {
             debug!("Response: {}", res.status());
             debug!("Headers: {:#?}", res.headers());
+            debug!("header thread: {:?}", std::thread::current());
 
             // The body is a stream, and for_each returns a new Future
             // when the stream is finished, and calls the closure on
@@ -66,8 +68,23 @@ fn fetch_url(url: hyper::Uri) -> impl Future<Item=(), Error=()> {
         })
         // If all good, just tell the user...
         .map(|body| {
-            let t_info = hyper::client::get_transport_info();
-            debug!("transport info: {:?}", t_info);
+            if let Some(t_info) = hyper::client::get_transport_info() {
+                debug!("body thread: {:?}", std::thread::current());
+                debug!("raw fd: {:?}", hyper::client::get_connection_fd());
+
+                debug!("transport info: {:?}", t_info);
+                let hyper::TransportInfo {
+                    req_finished_ts, res_begin_ts, res_header_finished_ts, res_header_length
+                } = t_info;
+
+                let req_finished = req_finished_ts.unwrap();
+                let res_begin = res_begin_ts.unwrap();
+                let res_header_finished = res_header_finished_ts.unwrap();
+                debug!("req finished to res begin: {:?}", res_begin - req_finished);
+                debug!("res begin to res header finished: {:?}", res_header_finished - res_begin);
+                debug!("res header len: {:?}", res_header_length);
+            }
+
             debug!("Done. Body: {:?}", body);
         })
         // If there was an error, let the user know...

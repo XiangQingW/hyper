@@ -22,7 +22,7 @@ use common::Exec;
 use upgrade::Upgraded;
 use proto;
 use super::dispatch;
-use {Body, Request, Response};
+use Request;
 
 type Http1Dispatcher<T, B, R> = proto::dispatch::Dispatcher<
     proto::dispatch::Client<B>,

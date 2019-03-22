@@ -584,7 +584,7 @@ impl Http1Transaction for Client {
                 match res.parse(bytes)? {
                     httparse::Status::Complete(len) => {
                         trace!("Response.parse Complete({})", len);
-                        super::dispatch::set_res_header_length(len);
+                        super::dispatch::set_res_header_length(len as u64);
 
                         let status = StatusCode::from_u16(res.code.unwrap())?;
                         let version = if res.version.unwrap() == 1 {
@@ -651,7 +651,7 @@ impl Http1Transaction for Client {
     }
 
     fn encode(msg: Encode<Self::Outgoing>, dst: &mut Vec<u8>) -> ::Result<Encoder> {
-        trace!("Client::encode method={:?}, body={:?}", msg.head.subject.0, msg.body);
+        debug!("Client::encode method={:?}, body={:?}", msg.head.subject.0, msg.body);
 
         *msg.req_method = Some(msg.head.subject.0.clone());
 

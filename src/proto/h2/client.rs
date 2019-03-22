@@ -11,7 +11,7 @@ use ::common::{Exec, Never};
 use headers;
 use ::proto::Dispatched;
 use super::{PipeToSendStream, SendBuf};
-use ::{Body, Request, Response};
+use ::Request;
 
 type ClientRx<B> = ::client::dispatch::Receiver<Request<B>, crate::NewResponse>;
 /// An mpsc channel is used to help notify the `Connection` task when *all*

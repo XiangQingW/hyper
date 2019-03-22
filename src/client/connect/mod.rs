@@ -16,7 +16,8 @@ use tokio_io::{AsyncRead, AsyncWrite};
 #[cfg(feature = "runtime")] pub mod dns;
 #[cfg(feature = "runtime")] mod http;
 #[cfg(feature = "runtime")] pub use self::http::{HttpConnector, HttpInfo};
-pub use self::http::{get_connection_pair_addrs, get_connection_begin_ts, get_use_ip_directly, get_dns_finished_ts, get_tcp_finished_ts, set_tls_finished_ts, get_tls_finished_ts, set_alpn_protocol, get_alpn_protocol, set_tls_protocol_version, get_tls_protocol_version, set_tls_cipher_suite, get_tls_cipher_suite};
+pub use self::http::{get_connection_peer_addr, get_use_ip_directly, get_dns_finished_ts, get_tcp_finished_ts, set_tls_finished_ts, get_tls_finished_ts, set_alpn_protocol, get_alpn_protocol, set_tls_protocol_version, get_tls_protocol_version, set_tls_cipher_suite, get_tls_cipher_suite};
+pub(crate) use self::http::set_connection_peer_addr;
 
 /// Connect to a destination, returning an IO transport.
 ///
@@ -49,6 +50,8 @@ pub struct Connected {
     pub(super) alpn: Alpn,
     pub(super) is_proxied: bool,
     pub(super) extra: Option<Extra>,
+    #[cfg(unix)]
+    pub(super) raw_fd: std::os::unix::io::RawFd,
 }
 
 pub(super) struct Extra(Box<ExtraInner>);
@@ -244,11 +247,26 @@ impl Destination {
 
 impl Connected {
     /// Create new `Connected` type with empty metadata.
+    #[cfg(not(unix))]
     pub fn new() -> Connected {
         Connected {
             alpn: Alpn::None,
             is_proxied: false,
             extra: None,
+            #[cfg(unix)]
+            raw_fd: None
+        }
+    }
+
+    /// Create new `Connected` type with empty metadata.
+    #[cfg(unix)]
+    pub fn new(raw_fd: std::os::unix::io::RawFd) -> Connected {
+        Connected {
+            alpn: Alpn::None,
+            is_proxied: false,
+            extra: None,
+            #[cfg(unix)]
+            raw_fd
         }
     }
 
@@ -288,6 +306,8 @@ impl Connected {
             alpn: self.alpn.clone(),
             is_proxied: self.is_proxied,
             extra: self.extra.clone(),
+            #[cfg(unix)]
+            raw_fd: self.raw_fd.clone(),
         }
     }
 }

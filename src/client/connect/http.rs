@@ -240,7 +240,6 @@ where
         };
 
         let addr = dns::get_addrs_by_uri(&dst.uri);
-        set_connection_begin_ts();
 
         HttpConnecting {
             state: State::Lazy(self.resolver.clone(), host.into(), self.local_address),
@@ -347,19 +346,13 @@ enum State<R: Resolve> {
     Error(Option<io::Error>),
 }
 
-/// get connection steps pair addrs
-pub fn get_connection_pair_addrs() -> Option<(SocketAddr, SocketAddr)> {
-    PAIR_ADDRS.with(|item| item.borrow().clone())
+/// get connection steps peer addr
+pub fn get_connection_peer_addr() -> Option<SocketAddr> {
+    PEER_ADDR.with(|item| item.borrow().clone())
 }
 
-/// set connection dns resolve finished timestamp
-fn set_connection_begin_ts() {
-    CONNECTION_BEGIN_TS.with(|item| *item.borrow_mut() = Instant::now())
-}
-
-/// get connection begin timestamp
-pub fn get_connection_begin_ts() -> Instant {
-    CONNECTION_BEGIN_TS.with(|item| item.borrow().clone())
+pub(crate) fn set_connection_peer_addr(addr: Option<SocketAddr>) {
+    PEER_ADDR.with(|item| *item.borrow_mut() = addr)
 }
 
 /// is use ip directly
@@ -428,9 +421,8 @@ pub fn get_tls_cipher_suite() -> Option<String> {
 }
 
 use std::cell::RefCell;
-task_local!(static PAIR_ADDRS: RefCell<Option<(SocketAddr, SocketAddr)>> = RefCell::new(None));
+task_local!(static PEER_ADDR: RefCell<Option<SocketAddr>> = RefCell::new(None));
 task_local!(static USE_IP_DIRECTLY: RefCell<Option<bool>> = RefCell::new(None));
-task_local!(static CONNECTION_BEGIN_TS: RefCell<Instant> = RefCell::new(Instant::now()));
 task_local!(static DNS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
 task_local!(static TCP_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
 task_local!(static TLS_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
@@ -534,14 +526,21 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                     set_tcp_finished_ts();
 
                     let peer_addr = sock.peer_addr()?;
-                    let local_addr = sock.local_addr()?;
-                    PAIR_ADDRS.with(|item| *item.borrow_mut() = Some((peer_addr, local_addr)));
+                    set_connection_peer_addr(Some(peer_addr));
 
                     let extra = HttpInfo {
                         remote_addr: peer_addr,
                     };
+
+                    #[cfg(not(unix))]
                     let connected = Connected::new()
                         .extra(extra);
+                    #[cfg(unix)]
+                    let connected = {
+                        use std::os::unix::io::AsRawFd;
+                        Connected::new(sock.as_raw_fd())
+                            .extra(extra)
+                    };
 
                     return Ok(Async::Ready((sock, connected)));
                 },

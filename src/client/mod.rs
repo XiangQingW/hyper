@@ -165,8 +165,27 @@ impl Client<(), Body> {
 }
 
 use std::cell::RefCell;
+use std::time::Instant;
 task_local!(static REUSE_IDLE_CONNECTION: RefCell<bool> = RefCell::new(false));
 task_local!(static TRANSPORT_INFO: RefCell<Option<crate::TransportInfo>> = RefCell::new(None));
+task_local!(static CONNECTION_FINISHED_TS: RefCell<Option<Instant>> = RefCell::new(None));
+task_local!(static REQUEST_BEGIN_TS: RefCell<Option<Instant>> = RefCell::new(None));
+#[cfg(unix)]
+mod raw_fd {
+    use std::os::unix::io::RawFd;
+    task_local!(static CONNECTION_FD: super::RefCell<Option<RawFd>> = super::RefCell::new(None));
+
+    pub fn get_connection_fd() -> Option<RawFd> {
+        CONNECTION_FD.with(|s| s.borrow().clone())
+    }
+
+    pub(super) fn set_connection_fd(raw_fd: RawFd) {
+        CONNECTION_FD.with(|s| *s.borrow_mut() = Some(raw_fd));
+    }
+}
+#[cfg(unix)]
+pub use self::raw_fd::get_connection_fd;
+
 /// get is reuse idle connection
 pub fn get_reuse_idle_connection() -> bool {
     REUSE_IDLE_CONNECTION.with(|item| item.borrow().clone())
@@ -177,6 +196,24 @@ pub fn get_transport_info() -> Option<crate::TransportInfo> {
 fn set_transport_info(t_info: crate::TransportInfo) {
     TRANSPORT_INFO.with(|s| *s.borrow_mut() = Some(t_info));
 }
+pub fn get_connection_finished_ts() -> Option<Instant> {
+    CONNECTION_FINISHED_TS.with(|s| s.borrow().clone())
+}
+fn set_connection_finished_ts() {
+    CONNECTION_FINISHED_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+}
+/// set connection dns resolve finished timestamp
+/// get connection begin timestamp
+pub fn get_request_begin_ts() -> Option<Instant> {
+    REQUEST_BEGIN_TS.with(|item| item.borrow().clone())
+}
+
+// fn set_req_begin_ts() {
+//     RES_BEGIN_TS.with(|s| *s.borrow_mut() = Some(Instant::now()));
+// }
+// pub fn get_req_begin_ts() -> Option<Instant> {
+//     RES_BEGIN_TS.with(|s| s.borrow().clone())
+// }
 
 impl<C, B> Client<C, B>
 where C: Connect + Sync + 'static,
@@ -281,7 +318,20 @@ where C: Connect + Sync + 'static,
     }
 
     fn send_request(&self, mut req: Request<B>, pool_key: PoolKey) -> impl Future<Item=Response<Body>, Error=ClientError<B>> {
-        let conn = self.connection_for(req.uri().clone(), pool_key);
+        let req_begin = Instant::now();
+        let conn = self.connection_for(req.uri().clone(), pool_key)
+            .inspect(move |pooled| {
+                #[cfg(unix)]
+                raw_fd::set_connection_fd(pooled.get_raw_fd());
+
+                set_connection_finished_ts();
+            });
+
+        let conn = future::ok::<(), ()>(())
+            .then(move |_| {
+                REQUEST_BEGIN_TS.with(|s| *s.borrow_mut() = Some(req_begin));
+                conn
+            });
 
         let set_host = self.config.set_host;
         let executor = self.conn_builder.exec.clone();
@@ -326,6 +376,9 @@ where C: Connect + Sync + 'static,
                 set_transport_info(t_info);
                 if let Some(extra) = extra_info {
                     extra.set(&mut res);
+
+                    connect::set_connection_peer_addr(res.extensions().get::<connect::HttpInfo>()
+                                                      .map(|info| info.remote_addr()))
                 }
                 res
             });
@@ -645,6 +698,11 @@ impl<B> PoolClient<B> {
             PoolTx::Http1(ref tx) => tx.is_closed(),
             PoolTx::Http2(ref tx) => tx.is_closed(),
         }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn get_raw_fd(&self) -> std::os::unix::io::RawFd {
+        self.conn_info.raw_fd.clone()
     }
 }
 

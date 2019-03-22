@@ -146,10 +146,6 @@ where I: AsyncRead + AsyncWrite,
         // Note: don't deconstruct `msg` into local variables, it appears
         // the optimizer doesn't remove the extra copies.
         super::dispatch::set_res_header_finished_ts();
-        if let Some(len) = msg.decode.clone().into_opt() {
-            super::dispatch::set_res_body_length(len as usize);
-        }
-
         debug!("incoming body is {}", msg.decode);
 
         self.state.busy();
@@ -410,8 +406,10 @@ where I: AsyncRead + AsyncWrite,
             self.state.writing = if !encoder.is_eof() {
                 Writing::Body(encoder)
             } else if encoder.is_last() {
+                // super::dispatch::set_req_finished_ts();
                 Writing::Closed
             } else {
+                // super::dispatch::set_req_finished_ts();
                 Writing::KeepAlive
             };
         }
@@ -425,6 +423,8 @@ where I: AsyncRead + AsyncWrite,
             if !encoder.is_eof() {
                 encoder.danger_full_buf(body, self.io.write_buf());
             }
+
+            // super::dispatch::set_req_finished_ts();
             self.state.writing = if is_last {
                 Writing::Closed
             } else {
@@ -491,7 +491,6 @@ where I: AsyncRead + AsyncWrite,
     // If we know the remote speaks an older version, we try to fix up any messages
     // to work with our older peer.
     fn enforce_version(&mut self, head: &mut MessageHead<T::Outgoing>) {
-
         match self.state.version {
             Version::HTTP_10 => {
                 // Fixes response or connection when keep-alive header is not present
@@ -518,6 +517,7 @@ where I: AsyncRead + AsyncWrite,
                 self.io.buffer(encoder.encode(chunk));
 
                 if encoder.is_eof() {
+                    // super::dispatch::set_req_finished_ts();
                     if encoder.is_last() {
                         Writing::Closed
                     } else {
@@ -541,6 +541,7 @@ where I: AsyncRead + AsyncWrite,
         let state = match self.state.writing {
             Writing::Body(ref encoder) => {
                 let can_keep_alive = encoder.encode_and_end(chunk, self.io.write_buf());
+                // super::dispatch::set_req_finished_ts();
                 if can_keep_alive {
                     Writing::KeepAlive
                 } else {
@@ -564,20 +565,23 @@ where I: AsyncRead + AsyncWrite,
                         if let Some(end) = end {
                             self.io.buffer(end);
                         }
+
+                        // super::dispatch::set_req_finished_ts();
                         if encoder.is_last() {
                             Writing::Closed
                         } else {
                             Writing::KeepAlive
                         }
                     },
-                    Err(_not_eof) => Writing::Closed,
+                    Err(_not_eof) => {
+                        Writing::Closed
+                    },
                 }
             },
             _ => return,
         };
 
         self.state.writing = state;
-
     }
 
     // When we get a parse error, depending on what side we are, we might be able
@@ -611,7 +615,8 @@ where I: AsyncRead + AsyncWrite,
     pub fn flush(&mut self) -> Poll<(), io::Error> {
         try_ready!(self.io.flush());
         self.try_keep_alive();
-        trace!("flushed({}): {:?}", T::LOG, self.state);
+        super::dispatch::set_req_finished_ts();
+        debug!("flushed({}): {:?}", T::LOG, self.state);
         Ok(Async::Ready(()))
     }
 

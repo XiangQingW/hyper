@@ -60,14 +60,10 @@ use std::time::Instant;
 
 #[derive(Clone, Debug, Default)]
 pub struct TransportInfo {
-    pub req_header_body_mixed: bool,
-    pub req_header_finished_ts: Option<Instant>,
-    pub req_header_length: Option<usize>,
-    pub req_body_finished_ts: Option<Instant>,
-    pub req_body_length: Option<usize>,
+    pub req_finished_ts: Option<Instant>,
+    pub res_begin_ts: Option<Instant>,
     pub res_header_finished_ts: Option<Instant>,
-    pub res_header_length: Option<usize>,
-    pub res_body_length: Option<usize>,
+    pub res_header_length: Option<u64>,
 }
 
 type NewResponse = (Response<Body>, TransportInfo);

@@ -163,9 +163,11 @@ pub fn get_transport_info(req_id: &str) -> Option<TransportInfo> {
 }
 
 pub const DEFAULT_REQ_ID: &str = "default";
+pub const SPLIT_PAT: &str = "+";
+
 pub fn get_uri_req_id(uri: &crate::Uri) -> String {
     let req_id = if let Some(fragment) = uri.fragment() {
-        let elements: Vec<_> = fragment.split('+').collect();
+        let elements: Vec<_> = fragment.split(SPLIT_PAT).collect();
         elements.last().map(|s| s.to_string())
     } else {
         None

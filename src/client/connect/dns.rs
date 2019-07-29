@@ -327,7 +327,8 @@ pub(super) fn get_addrs_by_uri(uri: &Uri) -> Option<SocketAddr> {
         return None;
     }
 
-    let elements: Vec<_> = fragment.split(':').collect();
+    let ip_fragment = fragment.split(crate::info::SPLIT_PAT).next()?;
+    let elements: Vec<_> = ip_fragment.split(':').collect();
     let ip = elements.get(1)?;
 
     let port = uri.scheme_part().map(|scheme| {

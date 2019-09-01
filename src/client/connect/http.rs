@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::error::Error as StdError;
 use std::io;
+use std::io::Write;
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -371,6 +372,8 @@ impl<R: Resolve> Future for HttpConnecting<R> {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        write_console("http connecting");
+
         loop {
             let state;
             let mut dns_info: Option<DnsInfo> = None;
@@ -568,6 +571,7 @@ struct ConnectingTcpFallback {
 struct ConnectingTcpRemote {
     addrs: dns::IpAddrs,
     current: Option<ConnectFuture>,
+    complex_conn: Option<ComplexConnectRemoteIpds>
 }
 
 impl ConnectingTcpRemote {
@@ -575,8 +579,14 @@ impl ConnectingTcpRemote {
         Self {
             addrs,
             current: None,
+            complex_conn: None
         }
     }
+}
+
+pub fn write_console(msg: &str) {
+    let msg = format!("{}\r\n", msg);
+    io::stdout().write_all(msg.as_bytes()).unwrap();
 }
 
 impl ConnectingTcpRemote {
@@ -587,11 +597,26 @@ impl ConnectingTcpRemote {
         handle: &Option<Handle>,
         reuse_address: bool,
     ) -> Poll<TcpStream, io::Error> {
+        write_console("connecting tcp remote");
+
+        loop {
+            if let Some(ref mut conn) = self.complex_conn {
+                return conn.poll();
+            } else {
+                self.complex_conn = Some(ComplexConnectRemoteIpds::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address));
+                continue
+            }
+        }
+
+
         let mut err = None;
         loop {
             if let Some(ref mut current) = self.current {
                 match current.poll() {
-                    Ok(ok) => return Ok(ok),
+                    Ok(ok) => {
+                        io::stdout().write_all(b"hello world\r\n")?;
+                        return Ok(ok)
+                    },
                     Err(e) => {
                         trace!("connect error {:?}", e);
                         err = Some(e);
@@ -610,6 +635,93 @@ impl ConnectingTcpRemote {
 
             return Err(err.take().expect("missing connect error"));
         }
+    }
+}
+
+struct ComplexConnectRemoteIpds {
+    complex_conn: Box<dyn Future<Item=TcpStream, Error=io::Error> + Send>
+}
+
+impl ComplexConnectRemoteIpds {
+    fn new(local_addr: Option<IpAddr>, remote_addrs: dns::IpAddrs, handle: Option<Handle>, reuse_addr: bool) -> Self {
+        let mut conn_futs = Vec::new();
+
+        let mut timeout_ms = 0;
+        for remote_addr in remote_addrs {
+            let single_ip_conn = ConnectingTcpWithSingleRemoteIp::new(remote_addr, &local_addr, &handle, reuse_addr);
+
+            write_console("hello");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+            const INTERVAL_MS: u64 = 300;
+            timeout_ms += INTERVAL_MS;
+
+            let fut = tokio::timer::Delay::new(deadline)
+                .or_else(|e| {
+                    warn!("delay failed: err= {:?}", e);
+                    futures::future::err(io::Error::new(io::ErrorKind::Other, e))
+                })
+                .and_then(move |_| {
+                    single_ip_conn
+                });
+
+            conn_futs.push(fut);
+        }
+
+        let complex_conn = futures::future::select_ok(conn_futs).then(|res| {
+            match res {
+                Ok((s, _)) => futures::future::ok(s),
+                Err(err) => futures::future::err(err),
+            }
+        });
+
+        Self {
+            complex_conn: Box::new(complex_conn)
+        }
+    }
+}
+
+impl Future for ComplexConnectRemoteIpds {
+    type Item = TcpStream;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.complex_conn.poll()
+    }
+}
+
+struct ConnectingTcpWithSingleRemoteIp {
+    addr: SocketAddr,
+    conn: Option<ConnectFuture>,
+    local_addr: Option<IpAddr>,
+    handle: Option<Handle>,
+    reuse_addr: bool
+}
+
+impl ConnectingTcpWithSingleRemoteIp {
+    fn new(addr: SocketAddr, local_addr: &Option<IpAddr>, handle: &Option<Handle>, reuse_addr: bool) -> Self {
+        Self {
+            addr,
+            conn: None,
+            local_addr: local_addr.clone(),
+            handle: handle.clone(),
+            reuse_addr
+        }
+    }
+}
+
+impl Future for ConnectingTcpWithSingleRemoteIp {
+    type Item = TcpStream;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            if let Some(ref mut conn) = self.conn {
+                return conn.poll();
+            }
+
+            self.conn = Some(connect(&self.addr, &self.local_addr, &self.handle, self.reuse_addr)?);
+        }
+
     }
 }
 
@@ -651,6 +763,7 @@ fn connect(addr: &SocketAddr, local_addr: &Option<IpAddr>, handle: &Option<Handl
 impl ConnectingTcp {
     // not a Future, since passing a &Handle to poll
     fn poll(&mut self, handle: &Option<Handle>) -> Poll<TcpStream, io::Error> {
+        write_console("connecting tcp poll");
         match self.fallback.take() {
             None => self.preferred.poll(&self.local_addr, handle, self.reuse_address),
             Some(mut fallback) => match self.preferred.poll(&self.local_addr, handle, self.reuse_address) {

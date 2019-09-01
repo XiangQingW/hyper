@@ -372,8 +372,6 @@ impl<R: Resolve> Future for HttpConnecting<R> {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        write_console("http connecting");
-
         loop {
             let state;
             let mut dns_info: Option<DnsInfo> = None;
@@ -597,8 +595,6 @@ impl ConnectingTcpRemote {
         handle: &Option<Handle>,
         reuse_address: bool,
     ) -> Poll<TcpStream, io::Error> {
-        write_console("connecting tcp remote");
-
         loop {
             if let Some(ref mut conn) = self.complex_conn {
                 return conn.poll();
@@ -607,7 +603,6 @@ impl ConnectingTcpRemote {
                 continue
             }
         }
-
 
         let mut err = None;
         loop {
@@ -643,14 +638,30 @@ struct ComplexConnectRemoteIpds {
 }
 
 impl ComplexConnectRemoteIpds {
+    fn get_complex_connect_addrs(addrs: dns::IpAddrs, count: usize) -> Vec<SocketAddr> {
+        let mut conn_addrs = Vec::new();
+        for addr in addrs {
+            conn_addrs.push(addr);
+        }
+
+        while conn_addrs.len() < count {
+            conn_addrs.extend(conn_addrs.clone());
+        }
+
+        conn_addrs.truncate(count);
+        conn_addrs
+    }
+
+
     fn new(local_addr: Option<IpAddr>, remote_addrs: dns::IpAddrs, handle: Option<Handle>, reuse_addr: bool) -> Self {
         let mut conn_futs = Vec::new();
 
         let mut timeout_ms = 0;
-        for remote_addr in remote_addrs {
+        let conn_addrs = Self::get_complex_connect_addrs(remote_addrs, 3);
+
+        for remote_addr in conn_addrs {
             let single_ip_conn = ConnectingTcpWithSingleRemoteIp::new(remote_addr, &local_addr, &handle, reuse_addr);
 
-            write_console("hello");
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
             const INTERVAL_MS: u64 = 300;
             timeout_ms += INTERVAL_MS;
@@ -661,6 +672,7 @@ impl ComplexConnectRemoteIpds {
                     futures::future::err(io::Error::new(io::ErrorKind::Other, e))
                 })
                 .and_then(move |_| {
+                    write_console("start to complex connect");
                     single_ip_conn
                 });
 
@@ -763,7 +775,6 @@ fn connect(addr: &SocketAddr, local_addr: &Option<IpAddr>, handle: &Option<Handl
 impl ConnectingTcp {
     // not a Future, since passing a &Handle to poll
     fn poll(&mut self, handle: &Option<Handle>) -> Poll<TcpStream, io::Error> {
-        write_console("connecting tcp poll");
         match self.fallback.take() {
             None => self.preferred.poll(&self.local_addr, handle, self.reuse_address),
             Some(mut fallback) => match self.preferred.poll(&self.local_addr, handle, self.reuse_address) {

@@ -383,7 +383,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                         dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Ip));
 
                         state = State::Connecting(ConnectingTcp::new(
-                            local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
+                            local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address, self.host.clone()));
                     } else {
                         let name = dns::Name::new(mem::replace(host, String::new()));
                         state = State::Resolving(resolver.resolve(name), local_addr);
@@ -410,6 +410,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                 addrs,
                                 self.happy_eyeballs_timeout,
                                 self.reuse_address,
+                                self.host.clone()
                             ))
                         }
                         None => {
@@ -417,9 +418,16 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                                 Ok(Async::Ready(addrs)) => {
                                     let port = self.port;
+                                    let mut sorted_addrs = Vec::new();
                                     let addrs = addrs
-                                        .map(|addr| SocketAddr::new(addr, port))
+                                        .map(|addr| {
+                                            let sorted_addr = super::dns::SortedAddr::new(addr.clone(), super::dns::AddrSource::LocalDNS);
+                                            sorted_addrs.push(sorted_addr);
+                                            SocketAddr::new(addr, port)})
                                         .collect();
+
+                                    super::dns::insert_domain_sorted_addrs(self.host.clone(), sorted_addrs, super::dns::AddrSource::LocalDNS);
+
                                     let addrs = dns::IpAddrs::new(addrs);
 
                                     debug!("resolve dns success: host= {:?} addrs= {:?}", self.host, addrs);
@@ -428,7 +436,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                     dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Resolved));
 
                                     state = State::Connecting(ConnectingTcp::new(
-                                        local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address));
+                                        local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address, self.host.clone()));
                                 }
                                 Err(err) => {
                                     warn!("resolve dns failed: err= {:?}", err);
@@ -447,6 +455,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                         cached_addrs,
                                         self.happy_eyeballs_timeout,
                                         self.reuse_address,
+                                        self.host.clone()
                                     ))
                                 }
                             }
@@ -528,13 +537,14 @@ impl ConnectingTcp {
         remote_addrs: dns::IpAddrs,
         fallback_timeout: Option<Duration>,
         reuse_address: bool,
+        domain: String
     ) -> ConnectingTcp {
         if let Some(fallback_timeout) = fallback_timeout {
             let (preferred_addrs, fallback_addrs) = remote_addrs.split_by_preference();
             if fallback_addrs.is_empty() {
                 return ConnectingTcp {
                     local_addr,
-                    preferred: ConnectingTcpRemote::new(preferred_addrs),
+                    preferred: ConnectingTcpRemote::new(preferred_addrs, domain),
                     fallback: None,
                     reuse_address,
                 };
@@ -542,17 +552,17 @@ impl ConnectingTcp {
 
             ConnectingTcp {
                 local_addr,
-                preferred: ConnectingTcpRemote::new(preferred_addrs),
+                preferred: ConnectingTcpRemote::new(preferred_addrs, domain.clone()),
                 fallback: Some(ConnectingTcpFallback {
                     delay: Delay::new(Instant::now() + fallback_timeout),
-                    remote: ConnectingTcpRemote::new(fallback_addrs),
+                    remote: ConnectingTcpRemote::new(fallback_addrs, domain),
                 }),
                 reuse_address,
             }
         } else {
             ConnectingTcp {
                 local_addr,
-                preferred: ConnectingTcpRemote::new(remote_addrs),
+                preferred: ConnectingTcpRemote::new(remote_addrs, domain),
                 fallback: None,
                 reuse_address,
             }
@@ -565,18 +575,38 @@ struct ConnectingTcpFallback {
     remote: ConnectingTcpRemote,
 }
 
+lazy_static! {
+    static ref ENABLE_COMPLEX_CONN: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
+}
+
+pub fn set_enable_complex_conn(is_enable: bool) {
+    if let Ok(mut enable) = ENABLE_COMPLEX_CONN.write() {
+        debug!("enable frontier complex conn");
+        *enable = is_enable;
+    }
+}
+
+pub fn enable_complex_conn() -> bool {
+    match ENABLE_COMPLEX_CONN.read() {
+        Ok(e) => *e,
+        Err(_) => false
+    }
+}
+
 struct ConnectingTcpRemote {
     addrs: dns::IpAddrs,
     current: Option<ConnectFuture>,
-    complex_conn: Option<ComplexConnectRemoteIps>
+    complex_conn: Option<ComplexConnectRemoteIps>,
+    domain: String,
 }
 
 impl ConnectingTcpRemote {
-    fn new(addrs: dns::IpAddrs) -> Self {
+    fn new(addrs: dns::IpAddrs, domain: String) -> Self {
         Self {
             addrs,
             current: None,
-            complex_conn: None
+            complex_conn: None,
+            domain
         }
     }
 }
@@ -589,12 +619,14 @@ impl ConnectingTcpRemote {
         handle: &Option<Handle>,
         reuse_address: bool,
     ) -> Poll<TcpStream, io::Error> {
-        loop {
-            if let Some(ref mut conn) = self.complex_conn {
-                return conn.poll();
-            } else {
-                self.complex_conn = Some(ComplexConnectRemoteIps::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address));
-                continue
+        if enable_complex_conn() {
+            loop {
+                if let Some(ref mut conn) = self.complex_conn {
+                    return conn.poll();
+                } else {
+                    self.complex_conn = Some(ComplexConnectRemoteIps::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address, self.domain.clone()));
+                    continue
+                }
             }
         }
 
@@ -629,41 +661,36 @@ struct ComplexConnectRemoteIps {
 }
 
 impl ComplexConnectRemoteIps {
-    fn get_complex_connect_addrs(addrs: dns::IpAddrs, count: usize) -> Vec<SocketAddr> {
-        let mut conn_addrs = Vec::new();
-        for addr in addrs {
-            conn_addrs.push(addr);
-        }
+    fn get_complex_connect_addrs(mut addrs: dns::IpAddrs, domain: &str) -> Vec<super::dns::SocketAddrWithDelayTime> {
+        let first_addr = addrs.next().unwrap();
 
-        while conn_addrs.len() < count {
-            conn_addrs.extend(conn_addrs.clone());
-        }
-
-        conn_addrs.truncate(count);
-        conn_addrs
+        super::dns::get_sorted_addrs(&domain, first_addr)
     }
 
-
-    fn new(local_addr: Option<IpAddr>, remote_addrs: dns::IpAddrs, handle: Option<Handle>, reuse_addr: bool) -> Self {
+    fn new(local_addr: Option<IpAddr>, remote_addrs: dns::IpAddrs, handle: Option<Handle>, reuse_addr: bool, domain: String) -> Self {
         let mut conn_futs = Vec::new();
 
-        let mut timeout_ms = 0;
-        let conn_addrs = Self::get_complex_connect_addrs(remote_addrs, 3);
+        let conn_addrs = Self::get_complex_connect_addrs(remote_addrs, &domain);
 
         for remote_addr in conn_addrs {
+            let delay_time = remote_addr.delay_time as u64;
+            let remote_addr = remote_addr.addr;
             let single_ip_conn = ConnectingTcpWithSingleRemoteIp::new(remote_addr, &local_addr, &handle, reuse_addr);
 
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-            const INTERVAL_MS: u64 = 300;
-            timeout_ms += INTERVAL_MS;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(delay_time);
 
+            let domain_clone = domain.clone();
             let fut = tokio::timer::Delay::new(deadline)
                 .or_else(|e| {
                     warn!("delay failed: err= {:?}", e);
                     futures::future::err(io::Error::new(io::ErrorKind::Other, e))
                 })
                 .and_then(move |_| {
-                    single_ip_conn
+                    let st = std::time::Instant::now();
+                    single_ip_conn.map(move |s| {
+                        super::dns::update_domain_sorted_addr_cost(&domain_clone, remote_addr.ip(), st.elapsed().as_millis() as i32);
+                        s
+                    })
                 });
 
             conn_futs.push(fut);

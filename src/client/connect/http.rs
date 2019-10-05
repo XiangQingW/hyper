@@ -569,7 +569,7 @@ struct ConnectingTcpFallback {
 struct ConnectingTcpRemote {
     addrs: dns::IpAddrs,
     current: Option<ConnectFuture>,
-    complex_conn: Option<ComplexConnectRemoteIpds>
+    complex_conn: Option<ComplexConnectRemoteIps>
 }
 
 impl ConnectingTcpRemote {
@@ -580,11 +580,6 @@ impl ConnectingTcpRemote {
             complex_conn: None
         }
     }
-}
-
-pub fn write_console(msg: &str) {
-    let msg = format!("{}\r\n", msg);
-    io::stdout().write_all(msg.as_bytes()).unwrap();
 }
 
 impl ConnectingTcpRemote {
@@ -599,7 +594,7 @@ impl ConnectingTcpRemote {
             if let Some(ref mut conn) = self.complex_conn {
                 return conn.poll();
             } else {
-                self.complex_conn = Some(ComplexConnectRemoteIpds::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address));
+                self.complex_conn = Some(ComplexConnectRemoteIps::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address));
                 continue
             }
         }
@@ -633,11 +628,11 @@ impl ConnectingTcpRemote {
     }
 }
 
-struct ComplexConnectRemoteIpds {
+struct ComplexConnectRemoteIps {
     complex_conn: Box<dyn Future<Item=TcpStream, Error=io::Error> + Send>
 }
 
-impl ComplexConnectRemoteIpds {
+impl ComplexConnectRemoteIps {
     fn get_complex_connect_addrs(addrs: dns::IpAddrs, count: usize) -> Vec<SocketAddr> {
         let mut conn_addrs = Vec::new();
         for addr in addrs {
@@ -672,7 +667,6 @@ impl ComplexConnectRemoteIpds {
                     futures::future::err(io::Error::new(io::ErrorKind::Other, e))
                 })
                 .and_then(move |_| {
-                    write_console("start to complex connect");
                     single_ip_conn
                 });
 
@@ -692,7 +686,7 @@ impl ComplexConnectRemoteIpds {
     }
 }
 
-impl Future for ComplexConnectRemoteIpds {
+impl Future for ComplexConnectRemoteIps {
     type Item = TcpStream;
     type Error = io::Error;
 

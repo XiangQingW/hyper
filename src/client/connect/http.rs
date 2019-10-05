@@ -448,7 +448,6 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                                     }
 
                                     dns_info = Some(create_and_set_dns_info(req_id, AddrResolveType::Cached));
-
                                     debug!("cached addrs is: host= {:?} cached_addr= {:?}", self.host, cached_addrs);
                                     state = State::Connecting(ConnectingTcp::new(
                                         local_addr,

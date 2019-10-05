@@ -460,10 +460,13 @@ fn take_sorted_addr(addrs: &mut BTreeSet<SortedAddr>, addr: &SortedAddr) -> Opti
 /// insert domain sorted addrs
 pub fn insert_domain_sorted_addrs(
     domain: String,
-    sorted_addrs: Vec<SortedAddr>,
+    mut sorted_addrs: Vec<SortedAddr>,
     source: AddrSource
 ) {
     let mut old_addrs = remove_old_domain_sorted_addrs(&domain, source);
+
+    sorted_addrs.sort_by(|a, b| a.addr.cmp(&b.addr));
+    let sorted_addrs: Vec<_> = sorted_addrs.into_iter().take(4).collect();
 
     let mut domain2addrs = DOMAIN2SORTED_ADDRS.write_lock();
     let entry = domain2addrs
@@ -484,8 +487,11 @@ pub fn insert_domain_sorted_addrs(
     }
 
     debug!(
-        "insert domain sorted addrs success: domain= {} entry= {:?} source= {:?}",
-        domain, entry, source
+        "insert domain sorted addrs success: domain= {} entry= {:?} len= {:?} source= {:?}",
+        domain,
+        entry,
+        entry.len(),
+        source
     );
 }
 
@@ -544,19 +550,25 @@ pub fn update_domain_sorted_addr_cost(domain: &str, addr: IpAddr, cost_ms: i32) 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocketAddrWithDelayTime {
     pub addr: SocketAddr,
-    pub delay_time: i32
+    pub delay_time: i32,
+    pub source: AddrSource
 }
 
 impl SocketAddrWithDelayTime {
     fn from_sorted_addr(sorted_addr: &SortedAddr, port: u16) -> Self {
         SocketAddrWithDelayTime {
             addr: SocketAddr::new(sorted_addr.addr.clone(), port),
-            delay_time: sorted_addr.delay_time()
+            delay_time: sorted_addr.delay_time(),
+            source: sorted_addr.source
         }
     }
 
     fn new(addr: SocketAddr, delay_time: i32) -> Self {
-        SocketAddrWithDelayTime { addr, delay_time }
+        SocketAddrWithDelayTime {
+            addr,
+            delay_time,
+            source: AddrSource::LocalDNS
+        }
     }
 }
 
@@ -593,7 +605,7 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
 
     fn has_selected(addrs: &[SocketAddrWithDelayTime], addr: &SortedAddr) -> bool {
         for a in addrs {
-            if a.addr.ip() == addr.addr {
+            if a.addr.ip() == addr.addr || a.source == addr.source {
                 return true;
             }
         }
@@ -605,7 +617,11 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
         .find(|a| !a.has_been_used() && !has_selected(&sorted_addrs, a))
     {
         Some(a) => sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(a, port)),
-        None => sorted_addrs.push(sorted_addrs[0].clone())
+        None => {
+            if let Some(last_addr) = addrs.iter().last() {
+                sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(last_addr, port));
+            }
+        }
     }
 
     let mut is_contain_first_addr = false;

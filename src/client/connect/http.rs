@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::fmt;
 use std::error::Error as StdError;
 use std::io;
-use std::io::Write;
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -603,10 +602,7 @@ impl ConnectingTcpRemote {
         loop {
             if let Some(ref mut current) = self.current {
                 match current.poll() {
-                    Ok(ok) => {
-                        io::stdout().write_all(b"hello world\r\n")?;
-                        return Ok(ok)
-                    },
+                    Ok(ok) => return Ok(ok),
                     Err(e) => {
                         trace!("connect error {:?}", e);
                         err = Some(e);

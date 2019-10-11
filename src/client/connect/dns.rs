@@ -588,7 +588,7 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
         return vec![first_addr];
     }
 
-    let mut sorted_addrs = Vec::new();
+    let mut sorted_addrs = vec![first_addr];
 
     let fastest_addr = addrs.iter().nth(0).unwrap();
     sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(
@@ -601,40 +601,6 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
         sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(faster_addr, port));
     } else {
         sorted_addrs.push(sorted_addrs[0].clone());
-    }
-
-    fn has_selected(addrs: &[SocketAddrWithDelayTime], addr: &SortedAddr) -> bool {
-        for a in addrs {
-            if a.addr.ip() == addr.addr || a.source == addr.source {
-                return true;
-            }
-        }
-        false
-    }
-
-    match addrs
-        .iter()
-        .find(|a| !a.has_been_used() && !has_selected(&sorted_addrs, a))
-    {
-        Some(a) => sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(a, port)),
-        None => {
-            if let Some(last_addr) = addrs.iter().last() {
-                sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(last_addr, port));
-            }
-        }
-    }
-
-    let mut is_contain_first_addr = false;
-    for addr in &sorted_addrs {
-        if addr.addr == first_addr.addr {
-            is_contain_first_addr = true;
-            break;
-        }
-    }
-
-    if !is_contain_first_addr {
-        sorted_addrs.insert(0, first_addr.clone());
-        sorted_addrs.pop();
     }
 
     fn get_delay_time(delay_time: i32, min: i32, max: i32) -> i32 {

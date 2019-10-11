@@ -588,7 +588,7 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
         return vec![first_addr];
     }
 
-    let mut sorted_addrs = vec![first_addr];
+    let mut sorted_addrs = vec![first_addr.clone()];
 
     let fastest_addr = addrs.iter().nth(0).unwrap();
     sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(

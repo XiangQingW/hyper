@@ -386,7 +386,7 @@ impl<R: Resolve> Future for HttpConnecting<R> {
                             local_addr, addrs, self.happy_eyeballs_timeout, self.reuse_address, self.host.clone()));
                     } else {
                         let name = dns::Name::new(mem::replace(host, String::new()));
-                        state = State::Resolving(resolver.resolve(name), local_addr);
+                        state = State::Resolving(resolver.resolve(name, self.port), local_addr);
                     }
                 },
                 State::Resolving(ref mut future, local_addr) => {

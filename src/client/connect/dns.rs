@@ -35,7 +35,7 @@ pub trait Resolve {
     /// A Future of the resolved set of addresses.
     type Future: Future<Item = Self::Addrs, Error = io::Error>;
     /// Resolve a hostname.
-    fn resolve(&self, name: Name) -> Self::Future;
+    fn resolve(&self, name: Name, port: u16) -> Self::Future;
 }
 
 /// A domain name to resolve into IP addresses.
@@ -56,7 +56,7 @@ pub struct GaiAddrs {
 
 /// A future to resole a name returned by `GaiResolver`.
 pub struct GaiFuture {
-    rx: oneshot::SpawnHandle<IpAddrs, io::Error>
+    rx: Box<dyn Future<Item = IpAddrs, Error = io::Error> + Send>
 }
 
 impl Name {
@@ -105,10 +105,28 @@ impl Resolve for GaiResolver {
     type Addrs = GaiAddrs;
     type Future = GaiFuture;
 
-    fn resolve(&self, name: Name) -> Self::Future {
+    fn resolve(&self, name: Name, port: u16) -> Self::Future {
+        let has_cached = has_cached_addrs(&name.host);
+
+        let domain = name.host.to_owned();
         let blocking = GaiBlocking::new(name.host);
         let rx = oneshot::spawn(blocking, &self.executor);
-        GaiFuture { rx }
+        let rx_fut = Box::new(rx);
+        if !has_cached {
+            return GaiFuture { rx: rx_fut };
+        }
+
+        use tokio::prelude::*;
+        const TIMEOUT: u64 = 3;
+        let fut = rx_fut
+            .timeout(std::time::Duration::from_secs(TIMEOUT))
+            .or_else(move |e| {
+                eprintln!("dns timeout");
+                warn!("delay failed: err= {:?}", e);
+                futures::future::ok(get_cached_ip_addrs(&domain, port))
+            });
+
+        GaiFuture { rx: Box::new(fut) }
     }
 }
 
@@ -293,7 +311,7 @@ impl Resolve for TokioThreadpoolGaiResolver {
     type Addrs = GaiAddrs;
     type Future = TokioThreadpoolGaiFuture;
 
-    fn resolve(&self, name: Name) -> TokioThreadpoolGaiFuture {
+    fn resolve(&self, name: Name, port: u16) -> TokioThreadpoolGaiFuture {
         TokioThreadpoolGaiFuture { name }
     }
 }
@@ -495,6 +513,15 @@ pub fn insert_domain_sorted_addrs(
     );
 }
 
+/// has cached addrs
+pub fn has_cached_addrs(domain: &str) -> bool {
+    let domain2addrs = DOMAIN2SORTED_ADDRS.read_lock();
+    match domain2addrs.get(domain) {
+        Some(addrs) => !addrs.is_empty(),
+        None => false
+    }
+}
+
 /// update domain sorted addr cost
 pub fn update_domain_sorted_addr_cost(domain: &str, addr: IpAddr, cost_ms: i32) {
     let mut domain2addrs = DOMAIN2SORTED_ADDRS.write_lock();
@@ -570,6 +597,26 @@ impl SocketAddrWithDelayTime {
             source: AddrSource::LocalDNS
         }
     }
+}
+
+fn get_cached_ip_addrs(domain: &str, port: u16) -> IpAddrs {
+    let domain2addrs = DOMAIN2SORTED_ADDRS.read_lock();
+
+    let addrs = match domain2addrs.get(domain) {
+        Some(addrs) => addrs,
+        None => return IpAddrs::new(vec![])
+    };
+
+    let addrs = addrs
+        .iter()
+        .take(3)
+        .map(|a| SocketAddr::new(a.addr.clone(), port))
+        .collect();
+    debug!(
+        "get cached ip addrs: domain= {:?} addrs= {:?}",
+        domain, addrs
+    );
+    IpAddrs::new(addrs)
 }
 
 /// get sorted addrs

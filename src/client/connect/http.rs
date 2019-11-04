@@ -597,11 +597,13 @@ struct ConnectingTcpRemote {
     current: Option<ConnectFuture>,
     complex_conn: Option<ComplexConnectRemoteIps>,
     domain: String,
+    complex_conn_addrs: dns::IpAddrs
 }
 
 impl ConnectingTcpRemote {
     fn new(addrs: dns::IpAddrs, domain: String) -> Self {
         Self {
+            complex_conn_addrs: addrs.clone(),
             addrs,
             current: None,
             complex_conn: None,
@@ -618,12 +620,12 @@ impl ConnectingTcpRemote {
         handle: &Option<Handle>,
         reuse_address: bool,
     ) -> Poll<TcpStream, io::Error> {
-        if enable_complex_conn() {
+        if enable_complex_conn() && !self.complex_conn_addrs.is_empty() {
             loop {
                 if let Some(ref mut conn) = self.complex_conn {
                     return conn.poll();
                 } else {
-                    self.complex_conn = Some(ComplexConnectRemoteIps::new(local_addr.clone(), self.addrs.clone(), handle.clone(), reuse_address, self.domain.clone()));
+                    self.complex_conn = Some(ComplexConnectRemoteIps::new(local_addr.clone(), self.complex_conn_addrs.clone(), handle.clone(), reuse_address, self.domain.clone()));
                     continue
                 }
             }

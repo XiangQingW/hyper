@@ -481,6 +481,10 @@ pub fn insert_domain_sorted_addrs(
     mut sorted_addrs: Vec<SortedAddr>,
     source: AddrSource
 ) {
+    if sorted_addrs.is_empty() {
+        warn!("insert domain failed, sorted addrs is empty: domain= {:?}", domain);
+        return;
+    }
     let mut old_addrs = remove_old_domain_sorted_addrs(&domain, source);
 
     sorted_addrs.sort_by(|a, b| a.addr.cmp(&b.addr));
@@ -637,14 +641,20 @@ pub fn get_sorted_addrs(domain: &str, first_addr: SocketAddr) -> Vec<SocketAddrW
 
     let mut sorted_addrs = vec![first_addr.clone()];
 
-    let fastest_addr = addrs.iter().nth(0).unwrap();
+    let fastest_addr = match addrs.iter().nth(0) {
+        Some(a) => a,
+        None => return sorted_addrs,
+    };
     sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(
         fastest_addr,
         port
     ));
 
     if 1 < addrs.len() {
-        let faster_addr = addrs.iter().nth(1).unwrap();
+        let faster_addr = match addrs.iter().nth(1) {
+            Some(a) => a,
+            None => return sorted_addrs,
+        };
         sorted_addrs.push(SocketAddrWithDelayTime::from_sorted_addr(faster_addr, port));
     } else {
         sorted_addrs.push(sorted_addrs[0].clone());

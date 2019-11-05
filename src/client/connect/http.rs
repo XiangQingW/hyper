@@ -663,7 +663,10 @@ struct ComplexConnectRemoteIps {
 
 impl ComplexConnectRemoteIps {
     fn get_complex_connect_addrs(mut addrs: dns::IpAddrs, domain: &str) -> Vec<super::dns::SocketAddrWithDelayTime> {
-        let first_addr = addrs.next().unwrap();
+        let first_addr = match addrs.next() {
+            Some(a) => a,
+            None => return vec![],
+        };
 
         super::dns::get_sorted_addrs(&domain, first_addr)
     }
@@ -672,6 +675,12 @@ impl ComplexConnectRemoteIps {
         let mut conn_futs = Vec::new();
 
         let conn_addrs = Self::get_complex_connect_addrs(remote_addrs, &domain);
+        if conn_addrs.is_empty() {
+            return
+                Self {
+                    complex_conn: Box::new(futures::future::err(io::Error::new(io::ErrorKind::Other, "conn addrs is empty")))
+                }
+        }
 
         for remote_addr in conn_addrs {
             let delay_time = remote_addr.delay_time as u64;
